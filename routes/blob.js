@@ -80,14 +80,19 @@ router.post('/', upload.single('file'), async (req, res) => {
     const filename = req.file.originalname;
     const blobClient = containerClient.getBlockBlobClient(filename);
     
-    // Upload from buffer - multer stores file in req.file.buffer
-    await blobClient.uploadData(req.file.buffer, {
+    // Start upload in background (don't await) to prevent frontend timeout
+    blobClient.uploadData(req.file.buffer, {
       blobHTTPHeaders: {
         blobContentType: req.file.mimetype
       }
+    }).then(() => {
+      console.log(`Upload completed: ${filename}`);
+    }).catch(err => {
+      console.error(`Upload failed: ${filename}`, err.message);
     });
 
-    res.json({ message: 'File uploaded successfully', filename });
+    // Respond immediately so frontend doesn't timeout
+    res.json({ message: 'File upload started', filename });
   } catch (error) {
     console.error('Error uploading blob:', error.message);
     res.status(500).json({ error: 'Failed to upload file' });
