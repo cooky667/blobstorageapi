@@ -77,28 +77,38 @@ router.post('/', (req, res) => {
     let fileReceived = false;
 
     bb.on('file', (fieldname, file, info) => {
-      fileReceived = true;
-      const safeFilename = info.filename || `upload_${Date.now()}`;
-      const contentType = info.mimeType || 'application/octet-stream';
+      try {
+        fileReceived = true;
+        const safeFilename = info.filename || `upload_${Date.now()}`;
+        const contentType = info.mimeType || 'application/octet-stream';
 
-      const blobClient = containerClient.getBlockBlobClient(safeFilename);
-      const bufferSize = 4 * 1024 * 1024; // 4MB blocks
-      const maxConcurrency = 5; // tune for throughput
+        console.log(`Starting upload: ${safeFilename} (${contentType})`);
 
-      blobClient
-        .uploadStream(file, bufferSize, maxConcurrency, {
-          blobHTTPHeaders: { blobContentType: contentType },
-        })
-        .then(() => {
-          console.log(`Upload completed: ${safeFilename}`);
-        })
-        .catch((err) => {
-          console.error(`Upload failed: ${safeFilename}`, err.message);
-        });
+        const blobClient = containerClient.getBlockBlobClient(safeFilename);
+        const bufferSize = 4 * 1024 * 1024; // 4MB blocks
+        const maxConcurrency = 5; // tune for throughput
 
-      if (!responded) {
-        responded = true;
-        res.json({ message: 'File upload started', filename: safeFilename });
+        blobClient
+          .uploadStream(file, bufferSize, maxConcurrency, {
+            blobHTTPHeaders: { blobContentType: contentType },
+          })
+          .then(() => {
+            console.log(`Upload completed: ${safeFilename}`);
+          })
+          .catch((err) => {
+            console.error(`Upload failed: ${safeFilename}`, err.message);
+          });
+
+        if (!responded) {
+          responded = true;
+          res.json({ message: 'File upload started', filename: safeFilename });
+        }
+      } catch (fileErr) {
+        console.error('Error in file handler:', fileErr.message);
+        if (!responded) {
+          responded = true;
+          res.status(500).json({ error: 'Failed to process file' });
+        }
       }
     });
 
@@ -119,8 +129,10 @@ router.post('/', (req, res) => {
 
     req.pipe(bb);
   } catch (error) {
-    console.error('Error uploading blob:', error.message);
-    res.status(500).json({ error: 'Failed to upload file' });
+    console.error('Error uploading blob:', error.message, error.stack);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to upload file' });
+    }
   }
 });
 
