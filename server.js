@@ -14,7 +14,16 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .map((o) => o.trim())
   .filter(Boolean);
 
-app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : '*' }));
+const corsOptions = {
+  origin: allowedOrigins.length ? allowedOrigins : '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+console.log('CORS configured for origins:', allowedOrigins.length ? allowedOrigins : 'all (*)')
+
+app.use(cors(corsOptions));
 
 // Health check (no auth)
 app.get('/health', (req, res) => {
