@@ -1,12 +1,11 @@
 const express = require('express');
-const multer = require('multer');
+const Busboy = require('busboy');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const { DefaultAzureCredential } = require('@azure/identity');
 
 const router = express.Router();
 
-// Configure multer to use memory storage (for streaming to blob)
-const upload = multer({ storage: multer.memoryStorage() });
+// Using Busboy for true streaming uploads (no memory buffering)
 
 // Initialize blob client using managed identity
 const blobServiceClient = new BlobServiceClient(
@@ -67,32 +66,58 @@ router.get('/:name', async (req, res) => {
 });
 
 // POST /api/files - Upload file (Uploader+)
-router.post('/', upload.single('file'), async (req, res) => {
+router.post('/', (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'uploader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file provided' });
-    }
+    const bb = new Busboy({ headers: req.headers, limits: { files: 1 } });
+    let responded = false;
+    let fileReceived = false;
 
-    const filename = req.file.originalname;
-    const blobClient = containerClient.getBlockBlobClient(filename);
-    
-    // Start upload in background (don't await) to prevent frontend timeout
-    blobClient.uploadData(req.file.buffer, {
-      blobHTTPHeaders: {
-        blobContentType: req.file.mimetype
+    bb.on('file', (fieldname, file, filename, encoding, mimetype) => {
+      fileReceived = true;
+      const safeFilename = filename || `upload_${Date.now()}`;
+      const contentType = mimetype || 'application/octet-stream';
+
+      const blobClient = containerClient.getBlockBlobClient(safeFilename);
+      const bufferSize = 4 * 1024 * 1024; // 4MB blocks
+      const maxConcurrency = 5; // tune for throughput
+
+      blobClient
+        .uploadStream(file, bufferSize, maxConcurrency, {
+          blobHTTPHeaders: { blobContentType: contentType },
+        })
+        .then(() => {
+          console.log(`Upload completed: ${safeFilename}`);
+        })
+        .catch((err) => {
+          console.error(`Upload failed: ${safeFilename}`, err.message);
+        });
+
+      if (!responded) {
+        responded = true;
+        res.json({ message: 'File upload started', filename: safeFilename });
       }
-    }).then(() => {
-      console.log(`Upload completed: ${filename}`);
-    }).catch(err => {
-      console.error(`Upload failed: ${filename}`, err.message);
     });
 
-    // Respond immediately so frontend doesn't timeout
-    res.json({ message: 'File upload started', filename });
+    bb.on('error', (err) => {
+      console.error('Busboy error:', err.message);
+      if (!responded) {
+        responded = true;
+        res.status(500).json({ error: 'Failed to upload file' });
+      }
+    });
+
+    bb.on('finish', () => {
+      if (!fileReceived && !responded) {
+        responded = true;
+        res.status(400).json({ error: 'No file provided' });
+      }
+    });
+
+    req.pipe(bb);
   } catch (error) {
     console.error('Error uploading blob:', error.message);
     res.status(500).json({ error: 'Failed to upload file' });
@@ -113,6 +138,22 @@ router.delete('/:name', async (req, res) => {
   } catch (error) {
     console.error('Error deleting blob:', error.message);
     res.status(500).json({ error: 'Failed to delete file' });
+  }
+});
+
+// GET /api/files/exists/:name - Check if blob exists (Reader+)
+router.get('/exists/:name', async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'reader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const blobClient = containerClient.getBlobClient(req.params.name);
+    const exists = await blobClient.exists();
+    res.json({ exists });
+  } catch (error) {
+    console.error('Error checking blob existence:', error.message);
+    res.status(500).json({ error: 'Failed to check file existence' });
   }
 });
 
