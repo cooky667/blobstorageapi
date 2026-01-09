@@ -108,8 +108,15 @@ router.post('/chunked', (req, res) => {
   console.log('=== CHUNKED UPLOAD ROUTE HIT ===');
   console.log('Query params:', req.query);
   console.log('Headers:', req.headers['content-type']);
+  console.log('User:', req.user);
+  console.log('User roles:', req.user?.roles);
   
   try {
+    if (!req.user || !req.user.roles) {
+      console.log('Missing user or roles');
+      return res.status(401).json({ error: 'Unauthorized - no user information' });
+    }
+    
     if (!checkPermission(req.user.roles, 'uploader')) {
       console.log('Permission denied');
       return res.status(403).json({ error: 'Insufficient permissions' });
@@ -126,6 +133,14 @@ router.post('/chunked', (req, res) => {
         error: 'Missing query parameters: filename, chunkIndex, totalChunks required',
         received: { filename, chunkIndex, totalChunks }
       });
+    }
+
+    // Verify content-type
+    const contentType = req.headers['content-type'] || '';
+    console.log('Content-Type:', contentType);
+    if (!contentType.includes('multipart/form-data')) {
+      console.log('Invalid content-type');
+      return res.status(400).json({ error: 'Content-Type must be multipart/form-data' });
     }
 
     console.log('Creating Busboy instance...');
