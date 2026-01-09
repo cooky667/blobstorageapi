@@ -132,55 +132,50 @@ router.post('/chunked', (req, res) => {
 
         console.log(`Uploading chunk ${chunkIndex}/${totalChunks} for ${filename}`);
 
-        // Upload this chunk as a block - collect all data first
-        try {
-          const chunks = [];
-          file.on('data', (chunk) => {
-            chunks.push(chunk);
-          });
+        // Collect stream data directly (don't buffer in memory)
+        const buffers = [];
+        let totalSize = 0;
 
-          file.on('end', async () => {
-            try {
-              const buffer = Buffer.concat(chunks);
-              console.log(`Buffered chunk ${chunkIndex}/${totalChunks}: ${buffer.length} bytes`);
+        file.on('data', (chunk) => {
+          buffers.push(chunk);
+          totalSize += chunk.length;
+        });
 
-              await blobClient.stageBlock(blockId, buffer, buffer.length);
+        file.on('end', async () => {
+          try {
+            const buffer = Buffer.concat(buffers, totalSize);
+            console.log(`Staging chunk ${chunkIndex}/${totalChunks}: ${buffer.length} bytes for ${filename}`);
 
-              console.log(`Chunk ${chunkIndex}/${totalChunks} uploaded for ${filename}`);
+            await blobClient.stageBlock(blockId, buffer, buffer.length);
 
-              if (!responded) {
-                responded = true;
-                res.json({ 
-                  message: 'Chunk uploaded', 
-                  chunkIndex: parseInt(chunkIndex),
-                  blockId 
-                });
-              }
-            } catch (stageErr) {
-              console.error(`Error staging block ${chunkIndex}:`, stageErr.message, stageErr);
-              if (!responded) {
-                responded = true;
-                res.status(500).json({ error: 'Failed to stage block', details: stageErr.message });
-              }
-            }
-          });
+            console.log(`✓ Chunk ${chunkIndex}/${totalChunks} completed for ${filename}`);
 
-          file.on('error', (fileErr) => {
-            console.error(`Error reading file stream for chunk ${chunkIndex}:`, fileErr.message);
             if (!responded) {
               responded = true;
-              res.status(500).json({ error: 'Failed to read file chunk' });
+              res.json({ 
+                message: 'Chunk uploaded', 
+                chunkIndex: parseInt(chunkIndex),
+                blockId 
+              });
             }
-          });
-        } catch (iterErr) {
-          console.error('Error iterating file stream:', iterErr.message);
+          } catch (stageErr) {
+            console.error(`✗ Error staging chunk ${chunkIndex}:`, stageErr.message);
+            if (!responded) {
+              responded = true;
+              res.status(500).json({ error: 'Failed to stage block', details: stageErr.message });
+            }
+          }
+        });
+
+        file.on('error', (fileErr) => {
+          console.error(`✗ Stream error for chunk ${chunkIndex}:`, fileErr.message);
           if (!responded) {
             responded = true;
-            res.status(500).json({ error: 'Failed to process file stream' });
+            res.status(500).json({ error: 'Failed to read file chunk', details: fileErr.message });
           }
-        }
+        });
       } catch (fileErr) {
-        console.error('Error uploading chunk:', fileErr.message, fileErr);
+        console.error('✗ Error in file handler:', fileErr.message);
         if (!responded) {
           responded = true;
           res.status(500).json({ error: 'Failed to upload chunk', details: fileErr.message });
