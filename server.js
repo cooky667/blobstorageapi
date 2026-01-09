@@ -30,6 +30,20 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK' });
 });
 
+// Diagnostic endpoint for chunked upload (no auth)
+app.post('/api/files/chunked/test', (req, res) => {
+  try {
+    res.json({ 
+      status: 'OK', 
+      query: req.query,
+      contentType: req.headers['content-type'],
+      hasAuth: !!req.headers.authorization 
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message, stack: error.stack });
+  }
+});
+
 // Auth middleware for all other routes
 app.use(authMiddleware);
 
