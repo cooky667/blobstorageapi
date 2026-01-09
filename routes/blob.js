@@ -1,8 +1,12 @@
 const express = require('express');
+const multer = require('multer');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const { DefaultAzureCredential } = require('@azure/identity');
 
 const router = express.Router();
+
+// Configure multer to use memory storage (for streaming to blob)
+const upload = multer({ storage: multer.memoryStorage() });
 
 // Initialize blob client using managed identity
 const blobServiceClient = new BlobServiceClient(
@@ -63,19 +67,25 @@ router.get('/:name', async (req, res) => {
 });
 
 // POST /api/files - Upload file (Uploader+)
-router.post('/', async (req, res) => {
+router.post('/', upload.single('file'), async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'uploader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const { filename, data } = req.body;
-    if (!filename || !data) {
-      return res.status(400).json({ error: 'filename and data required' });
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file provided' });
     }
 
+    const filename = req.file.originalname;
     const blobClient = containerClient.getBlockBlobClient(filename);
-    await blobClient.upload(Buffer.from(data, 'base64'), Buffer.byteLength(data, 'base64'));
+    
+    // Upload from buffer - multer stores file in req.file.buffer
+    await blobClient.uploadData(req.file.buffer, {
+      blobHTTPHeaders: {
+        blobContentType: req.file.mimetype
+      }
+    });
 
     res.json({ message: 'File uploaded successfully', filename });
   } catch (error) {
