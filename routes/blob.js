@@ -105,8 +105,13 @@ router.post('/chunked/commit', express.json(), async (req, res) => {
 // POST /api/files/chunked - Upload file chunk (Uploader+)
 // MUST be before /:name route to avoid wildcard matching
 router.post('/chunked', (req, res) => {
+  console.log('=== CHUNKED UPLOAD ROUTE HIT ===');
+  console.log('Query params:', req.query);
+  console.log('Headers:', req.headers['content-type']);
+  
   try {
     if (!checkPermission(req.user.roles, 'uploader')) {
+      console.log('Permission denied');
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
@@ -116,21 +121,29 @@ router.post('/chunked', (req, res) => {
     console.log('Received chunked upload request:', { filename, chunkIndex, totalChunks });
 
     if (!filename || chunkIndex === undefined || !totalChunks) {
+      console.log('Missing query parameters');
       return res.status(400).json({ 
         error: 'Missing query parameters: filename, chunkIndex, totalChunks required',
         received: { filename, chunkIndex, totalChunks }
       });
     }
 
+    console.log('Creating Busboy instance...');
     const bb = Busboy({ headers: req.headers, limits: { files: 1 } });
+    console.log('Busboy created successfully');
     let responded = false;
 
     bb.on('file', (fieldname, file, info) => {
+      console.log('=== BUSBOY FILE EVENT FIRED ===');
+      console.log('Fieldname:', fieldname);
+      console.log('Info:', info);
+      
       try {
         const blockId = Buffer.from(`chunk-${String(chunkIndex).padStart(6, '0')}`).toString('base64');
         const blobClient = containerClient.getBlockBlobClient(filename);
 
         console.log(`Uploading chunk ${chunkIndex}/${totalChunks} for ${filename}`);
+        console.log('BlockId:', blockId);
 
         // Collect stream data directly (don't buffer in memory)
         const buffers = [];
@@ -184,18 +197,26 @@ router.post('/chunked', (req, res) => {
     });
 
     bb.on('error', (err) => {
-      console.error('Busboy error in chunked upload:', err.message);
+      console.error('=== BUSBOY ERROR ===');
+      console.error('Busboy error in chunked upload:', err);
+      console.error('Error message:', err.message);
+      console.error('Error stack:', err.stack);
       if (!responded) {
         responded = true;
-        res.status(500).json({ error: 'Failed to process chunk' });
+        res.status(500).json({ error: 'Failed to process chunk', details: err.message });
       }
     });
 
+    console.log('Piping request to Busboy...');
     req.pipe(bb);
+    console.log('Request piped successfully');
   } catch (error) {
-    console.error('Error in chunked upload:', error.message);
+    console.error('=== OUTER CATCH ERROR ===');
+    console.error('Error in chunked upload:', error);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
     if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to upload chunk' });
+      res.status(500).json({ error: 'Failed to upload chunk', details: error.message });
     }
   }
 });
