@@ -22,14 +22,31 @@ const authMiddleware = (req, res, next) => {
     const apiClientId = process.env.API_CLIENT_ID;
     const allowedScope = process.env.ALLOWED_SCOPE;
 
+    console.log('[Auth] Token claims:', {
+      aud: payload.aud,
+      iss: payload.iss,
+      scp: payload.scp,
+      groups: payload.groups,
+      oid: payload.oid,
+      upn: payload.upn,
+    });
+
+    console.log('[Auth] Expected values:', {
+      expectedAud: apiClientId,
+      expectedIss: `https://login.microsoftonline.com/${tenantId}/v2.0`,
+      expectedScope: allowedScope,
+    });
+
     // Verify audience (should be the API's client ID)
     if (payload.aud !== apiClientId && !payload.aud.includes(apiClientId)) {
+      console.error('[Auth] FAILED: Invalid audience', { expected: apiClientId, got: payload.aud });
       return res.status(403).json({ error: 'Invalid audience' });
     }
 
     // Verify issuer
     const expectedIssuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
     if (payload.iss !== expectedIssuer) {
+      console.error('[Auth] FAILED: Invalid issuer', { expected: expectedIssuer, got: payload.iss });
       return res.status(403).json({ error: 'Invalid issuer' });
     }
 
@@ -51,6 +68,8 @@ const authMiddleware = (req, res, next) => {
     const isReader = groups.includes(readerGroupId);
     const isUploader = groups.includes(uploaderGroupId);
     const isAdmin = groups.includes(adminGroupId);
+
+    console.log('[Auth] SUCCESS: User authenticated', { isReader, isUploader, isAdmin });
 
     // Attach user info to request
     req.user = {
