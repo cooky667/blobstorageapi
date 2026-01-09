@@ -8,12 +8,30 @@ const router = express.Router();
 // Using Busboy for true streaming uploads (no memory buffering)
 
 // Initialize blob client using managed identity
-const blobServiceClient = new BlobServiceClient(
-  `https://${process.env.STORAGE_ACCOUNT}.blob.core.windows.net`,
-  new DefaultAzureCredential()
-);
+let blobServiceClient;
+let containerClient;
 
-const containerClient = blobServiceClient.getContainerClient(process.env.STORAGE_CONTAINER);
+try {
+  console.log('Initializing Azure Storage client...');
+  console.log('Storage Account:', process.env.STORAGE_ACCOUNT);
+  console.log('Storage Container:', process.env.STORAGE_CONTAINER);
+  
+  if (!process.env.STORAGE_ACCOUNT || !process.env.STORAGE_CONTAINER) {
+    throw new Error('Missing STORAGE_ACCOUNT or STORAGE_CONTAINER environment variables');
+  }
+  
+  blobServiceClient = new BlobServiceClient(
+    `https://${process.env.STORAGE_ACCOUNT}.blob.core.windows.net`,
+    new DefaultAzureCredential()
+  );
+
+  containerClient = blobServiceClient.getContainerClient(process.env.STORAGE_CONTAINER);
+  console.log('Azure Storage client initialized successfully');
+} catch (error) {
+  console.error('FATAL: Failed to initialize Azure Storage client:', error);
+  console.error('Stack:', error.stack);
+  throw error; // This will prevent the app from starting if storage init fails
+}
 
 // Helper: check permission
 const checkPermission = (roles, requiredRole) => {
