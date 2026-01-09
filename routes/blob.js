@@ -76,10 +76,10 @@ router.post('/', (req, res) => {
     let responded = false;
     let fileReceived = false;
 
-    bb.on('file', (fieldname, file, filename, encoding, mimetype) => {
+    bb.on('file', (fieldname, file, info) => {
       fileReceived = true;
-      const safeFilename = filename || `upload_${Date.now()}`;
-      const contentType = mimetype || 'application/octet-stream';
+      const safeFilename = info.filename || `upload_${Date.now()}`;
+      const contentType = info.mimeType || 'application/octet-stream';
 
       const blobClient = containerClient.getBlockBlobClient(safeFilename);
       const bufferSize = 4 * 1024 * 1024; // 4MB blocks
