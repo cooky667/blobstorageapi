@@ -5,7 +5,8 @@ const authMiddleware = require('./middleware/auth');
 const blobRoutes = require('./routes/blob');
 
 const app = express();
-app.use(express.json({ limit: '50mb' }));
+// Note: No express.json() for file uploads - multer handles multipart/form-data
+// Only add express.json() if you need JSON endpoints in the future
 
 // CORS: allow configured origins (SWA + localhost)
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
