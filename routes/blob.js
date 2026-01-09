@@ -79,7 +79,9 @@ router.post('/', (req, res) => {
     bb.on('file', (fieldname, file, info) => {
       try {
         fileReceived = true;
+        console.log('Busboy file event - fieldname:', fieldname, 'info:', info);
         const safeFilename = info.filename || `upload_${Date.now()}`;
+        // Busboy v1.x uses `mimeType` for MIME type, not `encoding`
         const contentType = info.mimeType || 'application/octet-stream';
 
         console.log(`Starting upload: ${safeFilename} (${contentType})`);
