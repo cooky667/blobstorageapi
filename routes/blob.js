@@ -123,135 +123,68 @@ router.post('/chunked/commit', express.json(), async (req, res) => {
 // POST /api/files/chunked - Upload file chunk (Uploader+)
 // MUST be before /:name route to avoid wildcard matching
 router.post('/chunked', (req, res) => {
-  console.log('=== CHUNKED UPLOAD ROUTE HIT ===');
-  console.log('Query params:', req.query);
-  console.log('Headers:', req.headers['content-type']);
-  console.log('User:', req.user);
-  console.log('User roles:', req.user?.roles);
-  
-  try {
-    if (!req.user || !req.user.roles) {
-      console.log('Missing user or roles');
-      return res.status(401).json({ error: 'Unauthorized - no user information' });
-    }
-    
-    if (!checkPermission(req.user.roles, 'uploader')) {
-      console.log('Permission denied');
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
+  if (!checkPermission(req.user.roles, 'uploader')) {
+    return res.status(403).json({ error: 'Insufficient permissions' });
+  }
 
-    // Get metadata from query parameters
-    const { filename, chunkIndex, totalChunks } = req.query;
-    
-    console.log('Received chunked upload request:', { filename, chunkIndex, totalChunks });
+  // Get metadata from query parameters
+  const { filename, chunkIndex, totalChunks } = req.query;
 
-    if (!filename || chunkIndex === undefined || !totalChunks) {
-      console.log('Missing query parameters');
-      return res.status(400).json({ 
-        error: 'Missing query parameters: filename, chunkIndex, totalChunks required',
-        received: { filename, chunkIndex, totalChunks }
-      });
-    }
+  if (!filename || chunkIndex === undefined || !totalChunks) {
+    return res.status(400).json({ 
+      error: 'Missing query parameters',
+      received: { filename, chunkIndex, totalChunks }
+    });
+  }
 
-    // Verify content-type
-    const contentType = req.headers['content-type'] || '';
-    console.log('Content-Type:', contentType);
-    if (!contentType.includes('multipart/form-data')) {
-      console.log('Invalid content-type');
-      return res.status(400).json({ error: 'Content-Type must be multipart/form-data' });
-    }
+  const bb = Busboy({ headers: req.headers });
+  let responded = false;
 
-    console.log('Creating Busboy instance...');
-    const bb = Busboy({ headers: req.headers, limits: { files: 1 } });
-    console.log('Busboy created successfully');
-    let responded = false;
+  bb.on('file', (fieldname, file, info) => {
+    const blockId = Buffer.from(`chunk-${String(chunkIndex).padStart(6, '0')}`).toString('base64');
+    const blobClient = containerClient.getBlockBlobClient(filename);
 
-    bb.on('file', (fieldname, file, info) => {
-      console.log('=== BUSBOY FILE EVENT FIRED ===');
-      console.log('Fieldname:', fieldname);
-      console.log('Info:', info);
-      
+    const buffers = [];
+    let totalSize = 0;
+
+    file.on('data', (chunk) => {
+      buffers.push(chunk);
+      totalSize += chunk.length;
+    });
+
+    file.on('end', async () => {
       try {
-        const blockId = Buffer.from(`chunk-${String(chunkIndex).padStart(6, '0')}`).toString('base64');
-        const blobClient = containerClient.getBlockBlobClient(filename);
+        const buffer = Buffer.concat(buffers, totalSize);
+        await blobClient.stageBlock(blockId, buffer, buffer.length);
 
-        console.log(`Uploading chunk ${chunkIndex}/${totalChunks} for ${filename}`);
-        console.log('BlockId:', blockId);
-
-        // Collect stream data directly (don't buffer in memory)
-        const buffers = [];
-        let totalSize = 0;
-
-        file.on('data', (chunk) => {
-          buffers.push(chunk);
-          totalSize += chunk.length;
-        });
-
-        file.on('end', async () => {
-          try {
-            const buffer = Buffer.concat(buffers, totalSize);
-            console.log(`Staging chunk ${chunkIndex}/${totalChunks}: ${buffer.length} bytes for ${filename}`);
-
-            await blobClient.stageBlock(blockId, buffer, buffer.length);
-
-            console.log(`✓ Chunk ${chunkIndex}/${totalChunks} completed for ${filename}`);
-
-            if (!responded) {
-              responded = true;
-              res.json({ 
-                message: 'Chunk uploaded', 
-                chunkIndex: parseInt(chunkIndex),
-                blockId 
-              });
-            }
-          } catch (stageErr) {
-            console.error(`✗ Error staging chunk ${chunkIndex}:`, stageErr.message);
-            if (!responded) {
-              responded = true;
-              res.status(500).json({ error: 'Failed to stage block', details: stageErr.message });
-            }
-          }
-        });
-
-        file.on('error', (fileErr) => {
-          console.error(`✗ Stream error for chunk ${chunkIndex}:`, fileErr.message);
-          if (!responded) {
-            responded = true;
-            res.status(500).json({ error: 'Failed to read file chunk', details: fileErr.message });
-          }
-        });
-      } catch (fileErr) {
-        console.error('✗ Error in file handler:', fileErr.message);
         if (!responded) {
           responded = true;
-          res.status(500).json({ error: 'Failed to upload chunk', details: fileErr.message });
+          res.json({ message: 'Chunk uploaded', chunkIndex: parseInt(chunkIndex), blockId });
+        }
+      } catch (err) {
+        if (!responded) {
+          responded = true;
+          res.status(500).json({ error: 'Failed to stage block', details: err.message });
         }
       }
     });
 
-    bb.on('error', (err) => {
-      console.error('=== BUSBOY ERROR ===');
-      console.error('Busboy error in chunked upload:', err);
-      console.error('Error message:', err.message);
-      console.error('Error stack:', err.stack);
+    file.on('error', (err) => {
       if (!responded) {
         responded = true;
-        res.status(500).json({ error: 'Failed to process chunk', details: err.message });
+        res.status(500).json({ error: 'File stream error', details: err.message });
       }
     });
+  });
 
-    console.log('Piping request to Busboy...');
-    req.pipe(bb);
-    console.log('Request piped successfully');
-  } catch (error) {
-    console.error('=== OUTER CATCH ERROR ===');
-    console.error('Error in chunked upload:', error);
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to upload chunk', details: error.message });
+  bb.on('error', (err) => {
+    if (!responded) {
+      responded = true;
+      res.status(500).json({ error: 'Busboy error', details: err.message });
     }
-  }
+  });
+
+  req.pipe(bb);
 });
 
 // GET /api/files/:name - Download file (Reader+)
