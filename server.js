@@ -5,8 +5,8 @@ const authMiddleware = require('./middleware/auth');
 const blobRoutes = require('./routes/blob');
 
 const app = express();
-// Note: No express.json() for file uploads - multer handles multipart/form-data
-// Only add express.json() if you need JSON endpoints in the future
+// Note: No express.json() globally for file uploads - multer/busboy handle multipart/form-data
+// But we need it for specific JSON endpoints like chunked commit
 
 // CORS: allow configured origins (SWA + localhost)
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
@@ -32,6 +32,9 @@ app.get('/health', (req, res) => {
 
 // Auth middleware for all other routes
 app.use(authMiddleware);
+
+// JSON parser only for commit endpoint (not for multipart uploads)
+app.use('/api/files/chunked/commit', express.json());
 
 // Blob routes
 app.use('/api/files', blobRoutes);
