@@ -110,36 +110,23 @@ router.post('/chunked', (req, res) => {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
+    // Get metadata from query parameters
+    const { filename, chunkIndex, totalChunks } = req.query;
+    
+    console.log('Received chunked upload request:', { filename, chunkIndex, totalChunks });
+
+    if (!filename || chunkIndex === undefined || !totalChunks) {
+      return res.status(400).json({ 
+        error: 'Missing query parameters: filename, chunkIndex, totalChunks required',
+        received: { filename, chunkIndex, totalChunks }
+      });
+    }
+
     const bb = Busboy({ headers: req.headers, limits: { files: 1 } });
     let responded = false;
-    let chunkMetadata = {};
-
-    // Collect form fields (filename, chunkIndex, totalChunks)
-    bb.on('field', (fieldname, val) => {
-      console.log(`Received field: ${fieldname} = ${val}`);
-      chunkMetadata[fieldname] = val;
-    });
 
     bb.on('file', async (fieldname, file, info) => {
       try {
-        const { filename, chunkIndex, totalChunks } = chunkMetadata;
-        
-        console.log('Chunk metadata:', chunkMetadata);
-        console.log(`Parsed: filename=${filename}, chunkIndex=${chunkIndex}, totalChunks=${totalChunks}`);
-        
-        if (!filename || chunkIndex === undefined || !totalChunks) {
-          console.error('Missing metadata in chunk upload. Received:', chunkMetadata);
-          if (!responded) {
-            responded = true;
-            res.status(400).json({ 
-              error: 'Missing metadata: filename, chunkIndex, totalChunks required',
-              received: chunkMetadata 
-            });
-          }
-          file.resume(); // drain the stream
-          return;
-        }
-
         const blockId = Buffer.from(`chunk-${String(chunkIndex).padStart(6, '0')}`).toString('base64');
         const blobClient = containerClient.getBlockBlobClient(filename);
 
