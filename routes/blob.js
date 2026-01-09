@@ -72,7 +72,7 @@ router.post('/', (req, res) => {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const bb = new Busboy({ headers: req.headers, limits: { files: 1 } });
+    const bb = Busboy({ headers: req.headers, limits: { files: 1 } });
     let responded = false;
     let fileReceived = false;
 
