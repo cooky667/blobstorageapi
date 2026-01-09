@@ -125,7 +125,7 @@ router.post('/chunked', (req, res) => {
     const bb = Busboy({ headers: req.headers, limits: { files: 1 } });
     let responded = false;
 
-    bb.on('file', async (fieldname, file, info) => {
+    bb.on('file', (fieldname, file, info) => {
       try {
         const blockId = Buffer.from(`chunk-${String(chunkIndex).padStart(6, '0')}`).toString('base64');
         const blobClient = containerClient.getBlockBlobClient(filename);
