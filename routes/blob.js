@@ -116,6 +116,7 @@ router.post('/chunked', (req, res) => {
 
     // Collect form fields (filename, chunkIndex, totalChunks)
     bb.on('field', (fieldname, val) => {
+      console.log(`Received field: ${fieldname} = ${val}`);
       chunkMetadata[fieldname] = val;
     });
 
@@ -123,10 +124,17 @@ router.post('/chunked', (req, res) => {
       try {
         const { filename, chunkIndex, totalChunks } = chunkMetadata;
         
+        console.log('Chunk metadata:', chunkMetadata);
+        console.log(`Parsed: filename=${filename}, chunkIndex=${chunkIndex}, totalChunks=${totalChunks}`);
+        
         if (!filename || chunkIndex === undefined || !totalChunks) {
+          console.error('Missing metadata in chunk upload. Received:', chunkMetadata);
           if (!responded) {
             responded = true;
-            res.status(400).json({ error: 'Missing metadata: filename, chunkIndex, totalChunks required' });
+            res.status(400).json({ 
+              error: 'Missing metadata: filename, chunkIndex, totalChunks required',
+              received: chunkMetadata 
+            });
           }
           file.resume(); // drain the stream
           return;
