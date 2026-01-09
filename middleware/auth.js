@@ -43,10 +43,12 @@ const authMiddleware = (req, res, next) => {
       return res.status(403).json({ error: 'Invalid audience' });
     }
 
-    // Verify issuer
-    const expectedIssuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
-    if (payload.iss !== expectedIssuer) {
-      console.error('[Auth] FAILED: Invalid issuer', { expected: expectedIssuer, got: payload.iss });
+    // Verify issuer (accept both v2.0 and STS endpoints)
+    const expectedIssuerV2 = `https://login.microsoftonline.com/${tenantId}/v2.0`;
+    const expectedIssuerSts = `https://sts.windows.net/${tenantId}/`;
+    const isIssuerValid = payload.iss === expectedIssuerV2 || payload.iss === expectedIssuerSts;
+    if (!isIssuerValid) {
+      console.error('[Auth] FAILED: Invalid issuer', { expectedV2: expectedIssuerV2, expectedSts: expectedIssuerSts, got: payload.iss });
       return res.status(403).json({ error: 'Invalid issuer' });
     }
 
