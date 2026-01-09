@@ -14,7 +14,6 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .filter(Boolean);
 
 app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : '*' }));
-app.options('*', cors());
 
 // Health check (no auth)
 app.get('/health', (req, res) => {
