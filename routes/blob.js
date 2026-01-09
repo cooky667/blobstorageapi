@@ -46,6 +46,142 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/files/exists/:name - Check if blob exists (Reader+)
+// MUST be before /:name route to avoid wildcard matching
+router.get('/exists/:name', async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'reader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const blobClient = containerClient.getBlobClient(req.params.name);
+    const exists = await blobClient.exists();
+    res.json({ exists });
+  } catch (error) {
+    console.error('Error checking blob existence:', error.message);
+    res.status(500).json({ error: 'Failed to check file existence' });
+  }
+});
+
+// POST /api/files/chunked/commit - Finalize chunked upload (Uploader+)
+// MUST be before /chunked route to match more specific path first
+router.post('/chunked/commit', express.json(), async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const { filename, totalChunks, contentType } = req.body;
+
+    if (!filename || !totalChunks) {
+      return res.status(400).json({ error: 'Missing filename or totalChunks' });
+    }
+
+    const blobClient = containerClient.getBlockBlobClient(filename);
+
+    // Build list of block IDs in order
+    const blockList = [];
+    for (let i = 0; i < parseInt(totalChunks); i++) {
+      const blockId = Buffer.from(`chunk-${String(i).padStart(6, '0')}`).toString('base64');
+      blockList.push(blockId);
+    }
+
+    console.log(`Committing ${totalChunks} chunks for ${filename}`);
+
+    // Commit all blocks to create the final blob
+    await blobClient.commitBlockList(blockList, {
+      blobHTTPHeaders: { blobContentType: contentType || 'application/octet-stream' }
+    });
+
+    console.log(`Chunked upload completed: ${filename}`);
+
+    res.json({ message: 'File uploaded successfully', filename });
+  } catch (error) {
+    console.error('Error committing chunks:', error.message);
+    res.status(500).json({ error: 'Failed to finalize upload' });
+  }
+});
+
+// POST /api/files/chunked - Upload file chunk (Uploader+)
+// MUST be before /:name route to avoid wildcard matching
+router.post('/chunked', (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const bb = Busboy({ headers: req.headers, limits: { files: 1 } });
+    let responded = false;
+    let chunkMetadata = {};
+
+    // Collect form fields (filename, chunkIndex, totalChunks)
+    bb.on('field', (fieldname, val) => {
+      chunkMetadata[fieldname] = val;
+    });
+
+    bb.on('file', async (fieldname, file, info) => {
+      try {
+        const { filename, chunkIndex, totalChunks } = chunkMetadata;
+        
+        if (!filename || chunkIndex === undefined || !totalChunks) {
+          if (!responded) {
+            responded = true;
+            res.status(400).json({ error: 'Missing metadata: filename, chunkIndex, totalChunks required' });
+          }
+          file.resume(); // drain the stream
+          return;
+        }
+
+        const blockId = Buffer.from(`chunk-${String(chunkIndex).padStart(6, '0')}`).toString('base64');
+        const blobClient = containerClient.getBlockBlobClient(filename);
+
+        console.log(`Uploading chunk ${chunkIndex}/${totalChunks} for ${filename}`);
+
+        // Upload this chunk as a block
+        const chunks = [];
+        for await (const chunk of file) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+
+        await blobClient.stageBlock(blockId, buffer, buffer.length);
+
+        console.log(`Chunk ${chunkIndex}/${totalChunks} uploaded for ${filename}`);
+
+        if (!responded) {
+          responded = true;
+          res.json({ 
+            message: 'Chunk uploaded', 
+            chunkIndex: parseInt(chunkIndex),
+            blockId 
+          });
+        }
+      } catch (fileErr) {
+        console.error('Error uploading chunk:', fileErr.message);
+        if (!responded) {
+          responded = true;
+          res.status(500).json({ error: 'Failed to upload chunk' });
+        }
+      }
+    });
+
+    bb.on('error', (err) => {
+      console.error('Busboy error in chunked upload:', err.message);
+      if (!responded) {
+        responded = true;
+        res.status(500).json({ error: 'Failed to process chunk' });
+      }
+    });
+
+    req.pipe(bb);
+  } catch (error) {
+    console.error('Error in chunked upload:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to upload chunk' });
+    }
+  }
+});
+
 // GET /api/files/:name - Download file (Reader+)
 router.get('/:name', async (req, res) => {
   try {
@@ -152,139 +288,6 @@ router.delete('/:name', async (req, res) => {
   } catch (error) {
     console.error('Error deleting blob:', error.message);
     res.status(500).json({ error: 'Failed to delete file' });
-  }
-});
-
-// GET /api/files/exists/:name - Check if blob exists (Reader+)
-router.get('/exists/:name', async (req, res) => {
-  try {
-    if (!checkPermission(req.user.roles, 'reader')) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-
-    const blobClient = containerClient.getBlobClient(req.params.name);
-    const exists = await blobClient.exists();
-    res.json({ exists });
-  } catch (error) {
-    console.error('Error checking blob existence:', error.message);
-    res.status(500).json({ error: 'Failed to check file existence' });
-  }
-});
-
-// POST /api/files/chunked - Upload file chunk (Uploader+)
-router.post('/chunked', (req, res) => {
-  try {
-    if (!checkPermission(req.user.roles, 'uploader')) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-
-    const bb = Busboy({ headers: req.headers, limits: { files: 1 } });
-    let responded = false;
-    let chunkMetadata = {};
-
-    // Collect form fields (filename, chunkIndex, totalChunks)
-    bb.on('field', (fieldname, val) => {
-      chunkMetadata[fieldname] = val;
-    });
-
-    bb.on('file', async (fieldname, file, info) => {
-      try {
-        const { filename, chunkIndex, totalChunks } = chunkMetadata;
-        
-        if (!filename || chunkIndex === undefined || !totalChunks) {
-          if (!responded) {
-            responded = true;
-            res.status(400).json({ error: 'Missing metadata: filename, chunkIndex, totalChunks required' });
-          }
-          file.resume(); // drain the stream
-          return;
-        }
-
-        const blockId = Buffer.from(`chunk-${String(chunkIndex).padStart(6, '0')}`).toString('base64');
-        const blobClient = containerClient.getBlockBlobClient(filename);
-
-        console.log(`Uploading chunk ${chunkIndex}/${totalChunks} for ${filename}`);
-
-        // Upload this chunk as a block
-        const chunks = [];
-        for await (const chunk of file) {
-          chunks.push(chunk);
-        }
-        const buffer = Buffer.concat(chunks);
-
-        await blobClient.stageBlock(blockId, buffer, buffer.length);
-
-        console.log(`Chunk ${chunkIndex}/${totalChunks} uploaded for ${filename}`);
-
-        if (!responded) {
-          responded = true;
-          res.json({ 
-            message: 'Chunk uploaded', 
-            chunkIndex: parseInt(chunkIndex),
-            blockId 
-          });
-        }
-      } catch (fileErr) {
-        console.error('Error uploading chunk:', fileErr.message);
-        if (!responded) {
-          responded = true;
-          res.status(500).json({ error: 'Failed to upload chunk' });
-        }
-      }
-    });
-
-    bb.on('error', (err) => {
-      console.error('Busboy error in chunked upload:', err.message);
-      if (!responded) {
-        responded = true;
-        res.status(500).json({ error: 'Failed to process chunk' });
-      }
-    });
-
-    req.pipe(bb);
-  } catch (error) {
-    console.error('Error in chunked upload:', error.message);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to upload chunk' });
-    }
-  }
-});
-
-// POST /api/files/chunked/commit - Finalize chunked upload (Uploader+)
-router.post('/chunked/commit', async (req, res) => {
-  try {
-    if (!checkPermission(req.user.roles, 'uploader')) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-
-    const { filename, totalChunks, contentType } = req.body;
-
-    if (!filename || !totalChunks) {
-      return res.status(400).json({ error: 'Missing filename or totalChunks' });
-    }
-
-    const blobClient = containerClient.getBlockBlobClient(filename);
-
-    // Build list of block IDs in order
-    const blockList = [];
-    for (let i = 0; i < parseInt(totalChunks); i++) {
-      const blockId = Buffer.from(`chunk-${String(i).padStart(6, '0')}`).toString('base64');
-      blockList.push(blockId);
-    }
-
-    console.log(`Committing ${totalChunks} chunks for ${filename}`);
-
-    // Commit all blocks to create the final blob
-    await blobClient.commitBlockList(blockList, {
-      blobHTTPHeaders: { blobContentType: contentType || 'application/octet-stream' }
-    });
-
-    console.log(`Chunked upload completed: ${filename}`);
-
-    res.json({ message: 'File uploaded successfully', filename });
-  } catch (error) {
-    console.error('Error committing chunks:', error.message);
-    res.status(500).json({ error: 'Failed to finalize upload' });
   }
 });
 
