@@ -614,12 +614,19 @@ router.delete(/^\/folders\/(.+)$/i, async (req, res) => {
     // Check if folder has any non-.keep blobs
     const prefix = folderPath + '/';
     let hasContents = false;
+    let blobCount = 0;
     for await (const blob of containerClient.listBlobsFlat({ prefix })) {
-      if (blob.name !== folderPath + '/.keep') {
+      blobCount++;
+      console.log(`Checking blob in folder: ${blob.name}`);
+      // Ignore .keep marker blobs when checking if folder is empty
+      if (!blob.name.endsWith('/.keep')) {
         hasContents = true;
+        console.log(`Found non-.keep blob: ${blob.name}`);
         break;
       }
     }
+
+    console.log(`Folder ${folderPath}: ${blobCount} total blobs, hasContents=${hasContents}`);
 
     if (hasContents) {
       return res.status(409).json({ error: 'Folder is not empty. Delete contents first.' });
