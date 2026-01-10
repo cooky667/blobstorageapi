@@ -148,8 +148,9 @@ router.get('/', async (req, res) => {
 });
 
 // GET /api/files/exists/* - Check if blob exists (Reader+)
+// Use regex to safely capture full blob path (including slashes)
 // MUST be before catch-all download route to avoid wildcard matching
-router.get('/exists/*', async (req, res) => {
+router.get(/^\/exists\/(.+)$/i, async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'reader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
@@ -278,7 +279,8 @@ router.post('/chunked', (req, res) => {
 });
 
 // GET /api/files/* - Download file (Reader+)
-router.get('/*', async (req, res) => {
+// Use regex to safely capture full blob path (including slashes)
+router.get(/^\/(.+)$/i, async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'reader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
