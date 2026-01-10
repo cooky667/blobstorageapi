@@ -85,8 +85,6 @@ const buildHierarchy = (blobs, folderPath = '') => {
     // Skip blobs not in current folder
     if (folderPath) {
       if (!normalized.startsWith(folderPath + '/')) continue;
-    } else {
-      if (normalized.includes('/')) continue;
     }
 
     // Get relative path from current folder
