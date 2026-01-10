@@ -105,12 +105,16 @@ const streamToBuffer = (readableStream) => {
 };
 
 // Helper: build hierarchical structure from flat blob list
+// Filters out .keep marker blobs (folder markers) from file lists
 const buildHierarchy = (blobs, folderPath = '') => {
   const folders = new Map();
   const files = [];
 
   for (const blob of blobs) {
     const normalized = normalizePath(blob.name);
+    
+    // Skip .keep marker blobs (used to persist empty folders)
+    if (normalized.endsWith('/.keep') || normalized === '.keep') continue;
     
     // Skip blobs not in current folder
     if (folderPath) {
@@ -461,8 +465,7 @@ router.delete('/:name', async (req, res) => {
 });
 
 // POST /api/files/folders/create - Create folder (Uploader+)
-// Note: We don't actually create a blob - folders are virtual based on file paths
-// The folder will appear once files are uploaded into it
+// Creates a .keep marker blob to persist the folder even if empty
 router.post('/folders/create', async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'uploader')) {
@@ -477,17 +480,59 @@ router.post('/folders/create', async (req, res) => {
     const normalized = normalizePath(folderPath);
     console.log(`Creating folder: ${normalized}`);
 
-    // In Azure Blob Storage, folders are virtual - they exist when files exist in them
-    // We just return success since the folder will be created automatically when
-    // users upload files into it via the ?folder= parameter
+    // Create a .keep marker blob to persist the folder
+    const markerPath = normalized + '/.keep';
+    const blobClient = containerClient.getBlockBlobClient(markerPath);
+    await blobClient.upload(Buffer.alloc(0), 0, {
+      blobHTTPHeaders: { blobContentType: 'application/x-msdownload' }
+    });
+
     res.json({ 
       message: 'Folder created successfully', 
       folderPath: normalized,
-      note: 'Folders are virtual and will appear once files are uploaded into them',
     });
   } catch (error) {
     console.error('Error creating folder:', error.message, error.stack);
     res.status(500).json({ error: 'Failed to create folder', details: error.message });
+  }
+});
+
+// DELETE /api/files/folders/* - Delete empty folder (Uploader+)
+// Requires folder to be empty (no files except .keep marker)
+router.delete(/^\/folders\/(.+)$/i, async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const folderPath = normalizePath(req.params[0] || '');
+    if (!folderPath) {
+      return res.status(400).json({ error: 'folderPath is required' });
+    }
+
+    // Check if folder has any non-.keep blobs
+    const prefix = folderPath + '/';
+    let hasContents = false;
+    for await (const blob of containerClient.listBlobsFlat({ prefix })) {
+      if (blob.name !== folderPath + '/.keep') {
+        hasContents = true;
+        break;
+      }
+    }
+
+    if (hasContents) {
+      return res.status(409).json({ error: 'Folder is not empty. Delete contents first.' });
+    }
+
+    // Delete the .keep marker blob
+    const markerPath = folderPath + '/.keep';
+    const blobClient = containerClient.getBlobClient(markerPath);
+    await blobClient.delete();
+
+    res.json({ message: 'Folder deleted successfully', folderPath });
+  } catch (error) {
+    console.error('Error deleting folder:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to delete folder', details: error.message });
   }
 });
 
