@@ -578,27 +578,8 @@ router.get(/^\/(.+)$/i, async (req, res) => {
   }
 });
 
-// DELETE /api/files/* - Delete file (Uploader+)
-// Regex route to capture blob paths with slashes (e.g., subfolder/file.txt)
-// MUST be last to avoid matching more specific routes
-router.delete(/^\/(.+)$/i, async (req, res) => {
-  try {
-    if (!checkPermission(req.user.roles, 'uploader')) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-
-    const blobPath = req.params[0];
-    const blobClient = containerClient.getBlobClient(blobPath);
-    await blobClient.delete();
-
-    res.json({ message: 'File deleted successfully', filename: blobPath });
-  } catch (error) {
-    console.error('Error deleting blob:', error.message);
-    res.status(500).json({ error: 'Failed to delete file' });
-  }
-});
-
 // DELETE /api/files/folders/* - Delete empty folder (Uploader+)
+// MUST be before catch-all DELETE /* to match specific path first
 // Requires folder to be empty (no files except .keep marker)
 router.delete(/^\/folders\/(.+)$/i, async (req, res) => {
   try {
@@ -656,6 +637,26 @@ router.delete(/^\/folders\/(.+)$/i, async (req, res) => {
   } catch (error) {
     console.error('Error deleting folder:', error.message, error.stack);
     res.status(500).json({ error: 'Failed to delete folder', details: error.message });
+  }
+});
+
+// DELETE /api/files/* - Delete file (Uploader+)
+// Regex route to capture blob paths with slashes (e.g., subfolder/file.txt)
+// MUST be last to avoid matching more specific routes like /folders/*
+router.delete(/^\/(.+)$/i, async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const blobPath = req.params[0];
+    const blobClient = containerClient.getBlobClient(blobPath);
+    await blobClient.delete();
+
+    res.json({ message: 'File deleted successfully', filename: blobPath });
+  } catch (error) {
+    console.error('Error deleting blob:', error.message);
+    res.status(500).json({ error: 'Failed to delete file' });
   }
 });
 
