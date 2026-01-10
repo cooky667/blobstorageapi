@@ -74,7 +74,8 @@ const streamToBuffer = (readableStream) => {
   });
 };
 
-// GET /api/files - List files with hierarchical structure (Reader+)
+// Helper: build hierarchical structure from flat blob list
+const buildHierarchy = (blobs, folderPath = '') => {
   const folders = new Map();
   const files = [];
 
