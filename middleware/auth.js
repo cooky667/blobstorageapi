@@ -1,6 +1,36 @@
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+
+// Download token helpers (must match blob.js)
+const DOWNLOAD_TOKEN_SECRET = process.env.DOWNLOAD_TOKEN_SECRET || 'download-token-secret';
+
+const verifyDownloadToken = (token) => {
+  try {
+    const decoded = Buffer.from(token, 'base64url').toString('utf8');
+    const [path, expStr, sig] = decoded.split('|');
+    if (!path || !expStr || !sig) return null;
+    const payload = `${path}|${expStr}`;
+    const expected = crypto.createHmac('sha256', DOWNLOAD_TOKEN_SECRET).update(payload).digest('hex');
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const exp = parseInt(expStr, 10);
+    if (Number.isNaN(exp) || exp < Math.floor(Date.now() / 1000)) return null;
+    return { path };
+  } catch (e) {
+    return null;
+  }
+};
 
 const authMiddleware = (req, res, next) => {
+  // Allow download requests with valid download tokens to bypass bearer auth
+  const downloadToken = req.query.dt;
+  if (downloadToken && req.method === 'GET') {
+    if (verifyDownloadToken(downloadToken)) {
+      // Valid download token; create minimal user context and proceed
+      req.user = { objectId: 'token-auth', isTokenAuth: true };
+      return next();
+    }
+  }
+
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
