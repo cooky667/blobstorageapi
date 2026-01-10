@@ -2,6 +2,7 @@ const express = require('express');
 const Busboy = require('busboy');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const { DefaultAzureCredential } = require('@azure/identity');
+const crypto = require('crypto');
 
 const router = express.Router();
 
@@ -10,6 +11,10 @@ const router = express.Router();
 // Initialize blob client using managed identity
 let blobServiceClient;
 let containerClient;
+
+// Download token config
+const DOWNLOAD_TOKEN_SECRET = process.env.DOWNLOAD_TOKEN_SECRET || 'download-token-secret';
+const DOWNLOAD_TOKEN_TTL_SECONDS = 5 * 60; // 5 minutes
 
 try {
   console.log('Initializing Azure Storage client...');
@@ -39,6 +44,31 @@ const checkPermission = (roles, requiredRole) => {
   if (requiredRole === 'uploader') return roles.isAdmin || roles.isUploader;
   if (requiredRole === 'reader') return roles.isAdmin || roles.isUploader || roles.isReader;
   return false;
+};
+
+// Simple HMAC-based download token (path + expiry)
+const createDownloadToken = (path) => {
+  const exp = Math.floor(Date.now() / 1000) + DOWNLOAD_TOKEN_TTL_SECONDS;
+  const payload = `${path}|${exp}`;
+  const sig = crypto.createHmac('sha256', DOWNLOAD_TOKEN_SECRET).update(payload).digest('hex');
+  const token = Buffer.from(`${payload}|${sig}`).toString('base64url');
+  return token;
+};
+
+const verifyDownloadToken = (token) => {
+  try {
+    const decoded = Buffer.from(token, 'base64url').toString('utf8');
+    const [path, expStr, sig] = decoded.split('|');
+    if (!path || !expStr || !sig) return null;
+    const payload = `${path}|${expStr}`;
+    const expected = crypto.createHmac('sha256', DOWNLOAD_TOKEN_SECRET).update(payload).digest('hex');
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const exp = parseInt(expStr, 10);
+    if (Number.isNaN(exp) || exp < Math.floor(Date.now() / 1000)) return null;
+    return { path };
+  } catch (e) {
+    return null;
+  }
 };
 
 // Helper: normalize path (remove leading/trailing slashes)
@@ -166,6 +196,23 @@ router.get(/^\/exists\/(.+)$/i, async (req, res) => {
   }
 });
 
+// POST /api/files/download-token - Issue short-lived download token (Reader+)
+router.post('/download-token', express.json(), async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'reader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    const { path } = req.body || {};
+    if (!path) return res.status(400).json({ error: 'Missing path' });
+    const normalized = normalizePath(path);
+    const token = createDownloadToken(normalized);
+    res.json({ token });
+  } catch (error) {
+    console.error('Error creating download token:', error.message);
+    res.status(500).json({ error: 'Failed to create download token' });
+  }
+});
+
 // POST /api/files/chunked/commit - Finalize chunked upload (Uploader+)
 // MUST be before /chunked route to match more specific path first
 router.post('/chunked/commit', express.json(), async (req, res) => {
@@ -282,17 +329,34 @@ router.post('/chunked', (req, res) => {
 // Use regex to safely capture full blob path (including slashes)
 router.get(/^\/(.+)$/i, async (req, res) => {
   try {
-    if (!checkPermission(req.user.roles, 'reader')) {
+    const blobPath = normalizePath(req.params[0] || '');
+
+    // Allow either bearer auth (default) or a short-lived download token
+    let authorized = false;
+    if (checkPermission(req.user.roles, 'reader')) {
+      authorized = true;
+    } else if (req.query.dt) {
+      const verified = verifyDownloadToken(req.query.dt);
+      if (verified && verified.path === blobPath) {
+        authorized = true;
+      }
+    }
+
+    if (!authorized) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const blobPath = normalizePath(req.params[0] || '');
     const blobClient = containerClient.getBlobClient(blobPath);
     const download = await blobClient.download();
 
+    // Set headers early so browser starts download immediately
+    const props = await blobClient.getProperties();
     res.setHeader('Content-Type', download.contentType || 'application/octet-stream');
     const filename = blobPath.split('/').pop() || blobPath;
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (props?.contentLength) {
+      res.setHeader('Content-Length', props.contentLength);
+    }
     download.readableStreamBody.pipe(res);
   } catch (error) {
     console.error('Error downloading blob:', error.message);
