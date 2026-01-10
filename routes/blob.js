@@ -329,46 +329,127 @@ router.post('/chunked', (req, res) => {
   req.pipe(bb);
 });
 
-// GET /api/files/* - Download file (Reader+)
-// Use regex to safely capture full blob path (including slashes)
-router.get(/^\/(.+)$/i, async (req, res) => {
+// POST /api/files/folders/create - Create folder (Uploader+)
+// MUST be before catch-all POST / to match specific path first
+// Creates a .keep marker blob to persist the folder even if empty
+router.post('/folders/create', async (req, res) => {
   try {
-    const blobPath = normalizePath(req.params[0] || '');
-
-    // Allow either bearer auth (default) or a short-lived download token
-    let authorized = false;
-    if (req.user && req.user.roles && checkPermission(req.user.roles, 'reader')) {
-      authorized = true;
-    } else if (req.query.dt) {
-      const verified = verifyDownloadToken(req.query.dt);
-      if (verified && verified.path === blobPath) {
-        authorized = true;
-      }
-    }
-
-    if (!authorized) {
+    if (!checkPermission(req.user.roles, 'uploader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const blobClient = containerClient.getBlobClient(blobPath);
-    const download = await blobClient.download();
-
-    // Set headers early so browser starts download immediately
-    const props = await blobClient.getProperties();
-    res.setHeader('Content-Type', download.contentType || 'application/octet-stream');
-    const filename = blobPath.split('/').pop() || blobPath;
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    if (props?.contentLength) {
-      res.setHeader('Content-Length', props.contentLength);
+    const { folderPath } = req.body;
+    if (!folderPath) {
+      return res.status(400).json({ error: 'folderPath is required' });
     }
-    download.readableStreamBody.pipe(res);
+
+    const normalized = normalizePath(folderPath);
+    console.log(`Creating folder: ${normalized}`);
+
+    // Create a .keep marker blob to persist the folder
+    const markerPath = normalized + '/.keep';
+    const blobClient = containerClient.getBlockBlobClient(markerPath);
+    await blobClient.upload(Buffer.alloc(0), 0, {
+      blobHTTPHeaders: { blobContentType: 'application/x-msdownload' }
+    });
+
+    res.json({ 
+      message: 'Folder created successfully', 
+      folderPath: normalized,
+    });
   } catch (error) {
-    console.error('Error downloading blob:', error.message);
-    res.status(500).json({ error: 'Failed to download file' });
+    console.error('Error creating folder:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to create folder', details: error.message });
+  }
+});
+
+// POST /api/files/move - Move file to different folder (Uploader+)
+// MUST be before catch-all POST / to match specific path first
+router.post('/move', async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const { sourcePath, destinationPath } = req.body;
+    if (!sourcePath || !destinationPath) {
+      return res.status(400).json({ error: 'sourcePath and destinationPath are required' });
+    }
+
+    const sourceNorm = normalizePath(sourcePath);
+    const destNorm = normalizePath(destinationPath);
+
+    // Server-side move via copy + delete (fast, no data transfer through API)
+    const sourceClient = containerClient.getBlobClient(sourceNorm);
+    const destClient = containerClient.getBlobClient(destNorm);
+    
+    console.log(`Starting server-side copy from ${sourceNorm} to ${destNorm}`);
+    const copyPoller = await destClient.beginCopyFromURL(sourceClient.url);
+    await copyPoller.pollUntilDone();
+    console.log(`Copy completed for move operation`);
+
+    // Delete source
+    await sourceClient.delete();
+
+    res.json({ 
+      message: 'File moved successfully',
+      from: sourceNorm,
+      to: destNorm,
+    });
+  } catch (error) {
+    console.error('Error moving file:', error.message);
+    res.status(500).json({ error: 'Failed to move file' });
+  }
+});
+
+// POST /api/files/rename - Rename file or folder (Uploader+)
+// MUST be before catch-all POST / to match specific path first
+router.post('/rename', async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const { oldPath, newName } = req.body;
+    if (!oldPath || !newName) {
+      return res.status(400).json({ error: 'oldPath and newName are required' });
+    }
+
+    const oldNorm = normalizePath(oldPath);
+    const folderPath = getFolderPath(oldNorm);
+    const newPath = folderPath ? folderPath + '/' + newName : newName;
+
+    console.log(`Renaming file: ${oldNorm} -> ${newPath}`);
+
+    // Use server-side copy (instant, no download/upload needed)
+    const sourceClient = containerClient.getBlobClient(oldNorm);
+    const destClient = containerClient.getBlobClient(newPath);
+    
+    console.log(`Starting server-side copy from ${oldNorm} to ${newPath}`);
+    const copyPoller = await destClient.beginCopyFromURL(sourceClient.url);
+    
+    // Wait for copy to complete
+    await copyPoller.pollUntilDone();
+    console.log(`Copy completed successfully`);
+
+    // Delete original
+    console.log(`Deleting original blob: ${oldNorm}`);
+    await sourceClient.delete();
+    console.log(`Rename completed: ${oldNorm} -> ${newPath}`);
+
+    res.json({ 
+      message: 'Renamed successfully',
+      oldPath: oldNorm,
+      newPath,
+    });
+  } catch (error) {
+    console.error('Error renaming:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to rename', details: error.message });
   }
 });
 
 // POST /api/files - Upload file (Uploader+)
+// Generic catch-all - MUST be after all specific POST routes
 router.post('/', (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'uploader')) {
@@ -447,8 +528,49 @@ router.post('/', (req, res) => {
   }
 });
 
+// GET /api/files/* - Download file (Reader+)
+// Use regex to safely capture full blob path (including slashes)
+// MUST be last to avoid matching more specific routes
+router.get(/^\/(.+)$/i, async (req, res) => {
+  try {
+    const blobPath = normalizePath(req.params[0] || '');
+
+    // Allow either bearer auth (default) or a short-lived download token
+    let authorized = false;
+    if (req.user && req.user.roles && checkPermission(req.user.roles, 'reader')) {
+      authorized = true;
+    } else if (req.query.dt) {
+      const verified = verifyDownloadToken(req.query.dt);
+      if (verified && verified.path === blobPath) {
+        authorized = true;
+      }
+    }
+
+    if (!authorized) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const blobClient = containerClient.getBlobClient(blobPath);
+    const download = await blobClient.download();
+
+    // Set headers early so browser starts download immediately
+    const props = await blobClient.getProperties();
+    res.setHeader('Content-Type', download.contentType || 'application/octet-stream');
+    const filename = blobPath.split('/').pop() || blobPath;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (props?.contentLength) {
+      res.setHeader('Content-Length', props.contentLength);
+    }
+    download.readableStreamBody.pipe(res);
+  } catch (error) {
+    console.error('Error downloading blob:', error.message);
+    res.status(500).json({ error: 'Failed to download file' });
+  }
+});
+
 // DELETE /api/files/* - Delete file (Uploader+)
 // Regex route to capture blob paths with slashes (e.g., subfolder/file.txt)
+// MUST be last to avoid matching more specific routes
 router.delete(/^\/(.+)$/i, async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'uploader')) {
@@ -463,39 +585,6 @@ router.delete(/^\/(.+)$/i, async (req, res) => {
   } catch (error) {
     console.error('Error deleting blob:', error.message);
     res.status(500).json({ error: 'Failed to delete file' });
-  }
-});
-
-// POST /api/files/folders/create - Create folder (Uploader+)
-// Creates a .keep marker blob to persist the folder even if empty
-router.post('/folders/create', async (req, res) => {
-  try {
-    if (!checkPermission(req.user.roles, 'uploader')) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-
-    const { folderPath } = req.body;
-    if (!folderPath) {
-      return res.status(400).json({ error: 'folderPath is required' });
-    }
-
-    const normalized = normalizePath(folderPath);
-    console.log(`Creating folder: ${normalized}`);
-
-    // Create a .keep marker blob to persist the folder
-    const markerPath = normalized + '/.keep';
-    const blobClient = containerClient.getBlockBlobClient(markerPath);
-    await blobClient.upload(Buffer.alloc(0), 0, {
-      blobHTTPHeaders: { blobContentType: 'application/x-msdownload' }
-    });
-
-    res.json({ 
-      message: 'Folder created successfully', 
-      folderPath: normalized,
-    });
-  } catch (error) {
-    console.error('Error creating folder:', error.message, error.stack);
-    res.status(500).json({ error: 'Failed to create folder', details: error.message });
   }
 });
 
@@ -532,123 +621,6 @@ router.delete(/^\/folders\/(.+)$/i, async (req, res) => {
     await blobClient.delete();
 
     res.json({ message: 'Folder deleted successfully', folderPath });
-  } catch (error) {
-    console.error('Error deleting folder:', error.message, error.stack);
-    res.status(500).json({ error: 'Failed to delete folder', details: error.message });
-  }
-});
-
-// POST /api/files/move - Move file to different folder (Uploader+)
-router.post('/move', async (req, res) => {
-  try {
-    if (!checkPermission(req.user.roles, 'uploader')) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-
-    const { sourcePath, destinationPath } = req.body;
-    if (!sourcePath || !destinationPath) {
-      return res.status(400).json({ error: 'sourcePath and destinationPath are required' });
-    }
-
-    const sourceNorm = normalizePath(sourcePath);
-    const destNorm = normalizePath(destinationPath);
-
-    // Server-side move via copy + delete (fast, no data transfer through API)
-    const sourceClient = containerClient.getBlobClient(sourceNorm);
-    const destClient = containerClient.getBlobClient(destNorm);
-    
-    console.log(`Starting server-side copy from ${sourceNorm} to ${destNorm}`);
-    const copyPoller = await destClient.beginCopyFromURL(sourceClient.url);
-    await copyPoller.pollUntilDone();
-    console.log(`Copy completed for move operation`);
-
-    // Delete source
-    await sourceClient.delete();
-
-    res.json({ 
-      message: 'File moved successfully',
-      from: sourceNorm,
-      to: destNorm,
-    });
-  } catch (error) {
-    console.error('Error moving file:', error.message);
-    res.status(500).json({ error: 'Failed to move file' });
-  }
-});
-
-// POST /api/files/rename - Rename file or folder (Uploader+)
-router.post('/rename', async (req, res) => {
-  try {
-    if (!checkPermission(req.user.roles, 'uploader')) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-
-    const { oldPath, newName } = req.body;
-    if (!oldPath || !newName) {
-      return res.status(400).json({ error: 'oldPath and newName are required' });
-    }
-
-    const oldNorm = normalizePath(oldPath);
-    const folderPath = getFolderPath(oldNorm);
-    const newPath = folderPath ? folderPath + '/' + newName : newName;
-
-    console.log(`Renaming file: ${oldNorm} -> ${newPath}`);
-
-    // Use server-side copy (instant, no download/upload needed)
-    const sourceClient = containerClient.getBlobClient(oldNorm);
-    const destClient = containerClient.getBlobClient(newPath);
-    
-    console.log(`Starting server-side copy from ${oldNorm} to ${newPath}`);
-    const copyPoller = await destClient.beginCopyFromURL(sourceClient.url);
-    
-    // Wait for copy to complete
-    await copyPoller.pollUntilDone();
-    console.log(`Copy completed successfully`);
-
-    // Delete original
-    console.log(`Deleting original blob: ${oldNorm}`);
-    await sourceClient.delete();
-    console.log(`Rename completed: ${oldNorm} -> ${newPath}`);
-
-    res.json({ 
-      message: 'Renamed successfully',
-      oldPath: oldNorm,
-      newPath,
-    });
-  } catch (error) {
-    console.error('Error renaming:', error.message, error.stack);
-    res.status(500).json({ error: 'Failed to rename', details: error.message });
-  }
-});
-
-// DELETE /api/files/folders/:folderPath - Delete folder and contents (Uploader+)
-router.delete('/folders/:folderPath', async (req, res) => {
-  try {
-    if (!checkPermission(req.user.roles, 'uploader')) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
-    }
-
-    const folderPath = normalizePath(req.params.folderPath);
-    console.log(`Deleting folder and contents: ${folderPath}`);
-    
-    let deletedCount = 0;
-
-    // List all blobs in folder and delete them
-    for await (const blob of containerClient.listBlobsFlat()) {
-      if (blob.name.startsWith(folderPath + '/')) {
-        console.log(`Deleting blob: ${blob.name}`);
-        await containerClient.getBlobClient(blob.name).delete();
-        deletedCount++;
-      }
-    }
-
-    console.log(`Deleted ${deletedCount} items from folder: ${folderPath}`);
-
-    res.json({ 
-      message: 'Folder deleted successfully',
-      folderPath,
-      itemsDeleted: deletedCount,
-    });
   } catch (error) {
     console.error('Error deleting folder:', error.message, error.stack);
     res.status(500).json({ error: 'Failed to delete folder', details: error.message });
