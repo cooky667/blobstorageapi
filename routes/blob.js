@@ -480,28 +480,21 @@ router.post('/rename', async (req, res) => {
 
     console.log(`Renaming file: ${oldNorm} -> ${newPath}`);
 
-    // Download the blob
+    // Use server-side copy (instant, no download/upload needed)
     const sourceClient = containerClient.getBlobClient(oldNorm);
-    console.log(`Getting source client for: ${oldNorm}`);
+    const destClient = containerClient.getBlobClient(newPath);
     
-    const downloadResponse = await sourceClient.download();
-    console.log(`Downloaded blob, converting stream to buffer`);
-    console.log(`Download response keys: ${Object.keys(downloadResponse).join(', ')}`);
+    console.log(`Starting server-side copy from ${oldNorm} to ${newPath}`);
+    const copyPoller = await destClient.beginCopyFromURL(sourceClient.url);
     
-    const buffer = await streamToBuffer(downloadResponse.readableStreamBody);
-    console.log(`Buffer created, size: ${buffer.length} bytes`);
-
-    // Upload to new path
-    const destClient = containerClient.getBlockBlobClient(newPath);
-    console.log(`Uploading to destination: ${newPath}`);
-    
-    await destClient.upload(buffer, buffer.length);
-    console.log(`Successfully uploaded to ${newPath}`);
+    // Wait for copy to complete
+    await copyPoller.pollUntilDone();
+    console.log(`Copy completed successfully`);
 
     // Delete original
     console.log(`Deleting original blob: ${oldNorm}`);
     await sourceClient.delete();
-    console.log(`Successfully deleted ${oldNorm}`);
+    console.log(`Rename completed: ${oldNorm} -> ${newPath}`);
 
     res.json({ 
       message: 'Renamed successfully',
