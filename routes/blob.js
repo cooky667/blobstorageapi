@@ -113,8 +113,8 @@ const buildHierarchy = (blobs, folderPath = '') => {
   for (const blob of blobs) {
     const normalized = normalizePath(blob.name);
     
-    // Skip .keep marker blobs (used to persist empty folders)
-    if (normalized.endsWith('/.keep') || normalized === '.keep') continue;
+    // Check if this is a .keep marker blob
+    const isKeepMarker = normalized.endsWith('/.keep') || normalized === '.keep';
     
     // Skip blobs not in current folder
     if (folderPath) {
@@ -137,9 +137,12 @@ const buildHierarchy = (blobs, folderPath = '') => {
           children: 0,
         });
       }
-      folders.get(subfolderName).children++;
-    } else {
-      // This is a file in current folder
+      // Only count non-.keep blobs as children
+      if (!isKeepMarker) {
+        folders.get(subfolderName).children++;
+      }
+    } else if (!isKeepMarker) {
+      // This is a file in current folder (but not a .keep marker)
       files.push({
         name: relativePath,
         fullPath: normalized,
