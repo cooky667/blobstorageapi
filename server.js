@@ -47,8 +47,9 @@ app.post('/api/files/chunked/test', (req, res) => {
 // Auth middleware for all other routes
 app.use(authMiddleware);
 
-// JSON parser only for commit endpoint (not for multipart uploads)
-app.use('/api/files/chunked/commit', express.json());
+// JSON parser for endpoints that need it (commit, folder operations, rename, move)
+// This is applied after auth but before routes
+app.use(express.json());
 
 // Blob routes
 app.use('/api/files', blobRoutes);
