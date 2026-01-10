@@ -606,13 +606,16 @@ router.delete(/^\/folders\/(.+)$/i, async (req, res) => {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const folderPath = normalizePath(req.params[0] || '');
-    if (!folderPath) {
+    const folderPath = decodeURIComponent(req.params[0] || '');
+    const normalized = normalizePath(folderPath);
+    console.log(`Delete folder request for: ${normalized}`);
+    
+    if (!normalized) {
       return res.status(400).json({ error: 'folderPath is required' });
     }
 
     // Check if folder has any non-.keep blobs
-    const prefix = folderPath + '/';
+    const prefix = normalized + '/';
     let hasContents = false;
     let blobCount = 0;
     for await (const blob of containerClient.listBlobsFlat({ prefix })) {
@@ -626,18 +629,30 @@ router.delete(/^\/folders\/(.+)$/i, async (req, res) => {
       }
     }
 
-    console.log(`Folder ${folderPath}: ${blobCount} total blobs, hasContents=${hasContents}`);
+    console.log(`Folder ${normalized}: ${blobCount} total blobs, hasContents=${hasContents}`);
 
     if (hasContents) {
       return res.status(409).json({ error: 'Folder is not empty. Delete contents first.' });
     }
 
-    // Delete the .keep marker blob
-    const markerPath = folderPath + '/.keep';
+    // Delete the .keep marker blob if it exists
+    const markerPath = normalized + '/.keep';
     const blobClient = containerClient.getBlobClient(markerPath);
-    await blobClient.delete();
+    
+    try {
+      const exists = await blobClient.exists();
+      if (exists) {
+        await blobClient.delete();
+        console.log(`Deleted .keep marker: ${markerPath}`);
+      } else {
+        console.log(`No .keep marker found at ${markerPath}, folder already empty`);
+      }
+    } catch (deleteError) {
+      console.warn(`Could not delete .keep marker at ${markerPath}:`, deleteError.message);
+      // Continue anyway - folder is empty
+    }
 
-    res.json({ message: 'Folder deleted successfully', folderPath });
+    res.json({ message: 'Folder deleted successfully', folderPath: normalized });
   } catch (error) {
     console.error('Error deleting folder:', error.message, error.stack);
     res.status(500).json({ error: 'Failed to delete folder', details: error.message });
