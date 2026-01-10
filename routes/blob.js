@@ -530,7 +530,7 @@ router.post('/rename', async (req, res) => {
     });
   } catch (error) {
     console.error('Error renaming:', error.message, error.stack);
-    res.status(500).json({ error: 'Failed to rename', details: error.message });
+    res.status(500).json({ error: 'Failed to rename', details: error.message, details: error.message });
   }
 });
 
