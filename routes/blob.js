@@ -41,23 +41,94 @@ const checkPermission = (roles, requiredRole) => {
   return false;
 };
 
-// GET /api/files - List files (Reader+)
+// Helper: normalize path (remove leading/trailing slashes)
+const normalizePath = (path) => {
+  return path.replace(/^\/+|\/+$/g, '');
+};
+
+// Helper: get folder path from file path
+const getFolderPath = (path) => {
+  const normalized = normalizePath(path);
+  const lastSlash = normalized.lastIndexOf('/');
+  return lastSlash === -1 ? '' : normalized.substring(0, lastSlash);
+};
+
+// Helper: get file/folder name from path
+const getBaseName = (path) => {
+  const normalized = normalizePath(path);
+  const lastSlash = normalized.lastIndexOf('/');
+  return lastSlash === -1 ? normalized : normalized.substring(lastSlash + 1);
+};
+
+// Helper: build hierarchical structure from flat blob list
+const buildHierarchy = (blobs, folderPath = '') => {
+  const folders = new Map();
+  const files = [];
+
+  for (const blob of blobs) {
+    const normalized = normalizePath(blob.name);
+    
+    // Skip blobs not in current folder
+    if (folderPath) {
+      if (!normalized.startsWith(folderPath + '/')) continue;
+    } else {
+      if (normalized.includes('/')) continue;
+    }
+
+    // Get relative path from current folder
+    const relativePath = folderPath 
+      ? normalized.substring(folderPath.length + 1) 
+      : normalized;
+
+    if (relativePath.includes('/')) {
+      // This is a file in a subfolder - extract folder name
+      const subfolderName = relativePath.substring(0, relativePath.indexOf('/'));
+      if (!folders.has(subfolderName)) {
+        folders.set(subfolderName, {
+          name: subfolderName,
+          path: folderPath ? folderPath + '/' + subfolderName : subfolderName,
+          type: 'folder',
+          children: 0,
+        });
+      }
+      folders.get(subfolderName).children++;
+    } else {
+      // This is a file in current folder
+      files.push({
+        name: relativePath,
+        fullPath: normalized,
+        size: blob.properties.contentLength,
+        created: blob.properties.createdOn,
+        type: 'file',
+      });
+    }
+  }
+
+  return {
+    folders: Array.from(folders.values()),
+    files,
+  };
+};
+
+// GET /api/files - List files with hierarchical structure (Reader+)
 router.get('/', async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'reader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const files = [];
+    const folderPath = req.query.folder ? normalizePath(req.query.folder) : '';
+    const blobs = [];
+    
     for await (const blob of containerClient.listBlobsFlat()) {
-      files.push({
-        name: blob.name,
-        size: blob.properties.contentLength,
-        created: blob.properties.createdOn,
-      });
+      blobs.push(blob);
     }
 
-    res.json({ files });
+    const structure = buildHierarchy(blobs, folderPath);
+    res.json({ 
+      currentPath: folderPath || '/',
+      ...structure,
+    });
   } catch (error) {
     console.error('Error listing blobs:', error.message);
     res.status(500).json({ error: 'Failed to list files' });
@@ -89,13 +160,16 @@ router.post('/chunked/commit', express.json(), async (req, res) => {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const { filename, totalChunks, contentType } = req.body;
+    const { filename, totalChunks, contentType, folder } = req.body;
+    const targetFolder = folder ? normalizePath(folder) : '';
 
     if (!filename || !totalChunks) {
       return res.status(400).json({ error: 'Missing filename or totalChunks' });
     }
 
-    const blobClient = containerClient.getBlockBlobClient(filename);
+    // Build full blob path with folder
+    const fullPath = targetFolder ? targetFolder + '/' + filename : filename;
+    const blobClient = containerClient.getBlockBlobClient(fullPath);
 
     // Build list of block IDs in order
     const blockList = [];
@@ -104,16 +178,15 @@ router.post('/chunked/commit', express.json(), async (req, res) => {
       blockList.push(blockId);
     }
 
-    console.log(`Committing ${totalChunks} chunks for ${filename}`);
+    console.log(`Committing ${totalChunks} chunks for ${fullPath}`);
 
     // Commit all blocks to create the final blob
     await blobClient.commitBlockList(blockList, {
       blobHTTPHeaders: { blobContentType: contentType || 'application/octet-stream' }
     });
 
-    console.log(`Chunked upload completed: ${filename}`);
-
-    res.json({ message: 'File uploaded successfully', filename });
+    console.log(`Chunked upload completed: ${fullPath}`);
+    res.json({ message: 'File uploaded successfully', filename, path: fullPath });
   } catch (error) {
     console.error('Error committing chunks:', error.message);
     res.status(500).json({ error: 'Failed to finalize upload' });
@@ -128,7 +201,8 @@ router.post('/chunked', (req, res) => {
   }
 
   // Get metadata from query parameters
-  const { filename, chunkIndex, totalChunks } = req.query;
+  const { filename, chunkIndex, totalChunks, folder } = req.query;
+  const targetFolder = folder ? normalizePath(folder) : '';
 
   if (!filename || chunkIndex === undefined || !totalChunks) {
     return res.status(400).json({ 
@@ -137,12 +211,15 @@ router.post('/chunked', (req, res) => {
     });
   }
 
+  // Build full blob path with folder
+  const fullPath = targetFolder ? targetFolder + '/' + filename : filename;
+
   const bb = Busboy({ headers: req.headers });
   let responded = false;
 
   bb.on('file', (fieldname, file, info) => {
     const blockId = Buffer.from(`chunk-${String(chunkIndex).padStart(6, '0')}`).toString('base64');
-    const blobClient = containerClient.getBlockBlobClient(filename);
+    const blobClient = containerClient.getBlockBlobClient(fullPath);
 
     const buffers = [];
     let totalSize = 0;
@@ -213,6 +290,9 @@ router.post('/', (req, res) => {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
+    // Get target folder from query params
+    const targetFolder = req.query.folder ? normalizePath(req.query.folder) : '';
+
     const bb = Busboy({ headers: req.headers, limits: { files: 1 } });
     let responded = false;
     let fileReceived = false;
@@ -225,9 +305,12 @@ router.post('/', (req, res) => {
         // Busboy v1.x uses `mimeType` for MIME type, not `encoding`
         const contentType = info.mimeType || 'application/octet-stream';
 
-        console.log(`Starting upload: ${safeFilename} (${contentType})`);
+        // Build full blob path with folder
+        const fullPath = targetFolder ? targetFolder + '/' + safeFilename : safeFilename;
 
-        const blobClient = containerClient.getBlockBlobClient(safeFilename);
+        console.log(`Starting upload: ${fullPath} (${contentType})`);
+
+        const blobClient = containerClient.getBlockBlobClient(fullPath);
         const bufferSize = 4 * 1024 * 1024; // 4MB blocks
         const maxConcurrency = 5; // tune for throughput
 
@@ -236,15 +319,15 @@ router.post('/', (req, res) => {
             blobHTTPHeaders: { blobContentType: contentType },
           })
           .then(() => {
-            console.log(`Upload completed: ${safeFilename}`);
+            console.log(`Upload completed: ${fullPath}`);
           })
           .catch((err) => {
-            console.error(`Upload failed: ${safeFilename}`, err.message);
+            console.error(`Upload failed: ${fullPath}`, err.message);
           });
 
         if (!responded) {
           responded = true;
-          res.json({ message: 'File upload started', filename: safeFilename });
+          res.json({ message: 'File upload started', filename: safeFilename, path: fullPath });
         }
       } catch (fileErr) {
         console.error('Error in file handler:', fileErr.message);
@@ -293,6 +376,176 @@ router.delete('/:name', async (req, res) => {
   } catch (error) {
     console.error('Error deleting blob:', error.message);
     res.status(500).json({ error: 'Failed to delete file' });
+  }
+});
+
+// POST /api/folders - Create folder (Uploader+)
+router.post('/folders/create', async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const { folderPath } = req.body;
+    if (!folderPath) {
+      return res.status(400).json({ error: 'folderPath is required' });
+    }
+
+    const normalized = normalizePath(folderPath);
+    // Create a placeholder blob to represent the folder
+    const placeholderPath = normalized.endsWith('/') 
+      ? normalized + '.folder' 
+      : normalized + '/.folder';
+
+    await containerClient.getBlockBlobClient(placeholderPath).upload('', 0);
+
+    res.json({ 
+      message: 'Folder created successfully', 
+      folderPath: normalized,
+    });
+  } catch (error) {
+    console.error('Error creating folder:', error.message);
+    res.status(500).json({ error: 'Failed to create folder' });
+  }
+});
+
+// POST /api/files/move - Move file to different folder (Uploader+)
+router.post('/move', async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const { sourcePath, destinationPath } = req.body;
+    if (!sourcePath || !destinationPath) {
+      return res.status(400).json({ error: 'sourcePath and destinationPath are required' });
+    }
+
+    const sourceNorm = normalizePath(sourcePath);
+    const destNorm = normalizePath(destinationPath);
+
+    // Download source blob
+    const sourceClient = containerClient.getBlobClient(sourceNorm);
+    const downloadResponse = await sourceClient.download();
+    const buffer = await downloadResponse.blobBody.arrayBuffer();
+
+    // Upload to destination
+    const destClient = containerClient.getBlockBlobClient(destNorm);
+    await destClient.upload(Buffer.from(buffer), buffer.byteLength);
+
+    // Delete source
+    await sourceClient.delete();
+
+    res.json({ 
+      message: 'File moved successfully',
+      from: sourceNorm,
+      to: destNorm,
+    });
+  } catch (error) {
+    console.error('Error moving file:', error.message);
+    res.status(500).json({ error: 'Failed to move file' });
+  }
+});
+
+// POST /api/files/rename - Rename file or folder (Uploader+)
+router.post('/rename', async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const { oldPath, newName } = req.body;
+    if (!oldPath || !newName) {
+      return res.status(400).json({ error: 'oldPath and newName are required' });
+    }
+
+    const oldNorm = normalizePath(oldPath);
+    const folderPath = getFolderPath(oldNorm);
+    const newPath = folderPath ? folderPath + '/' + newName : newName;
+
+    // If it's a folder (has .folder placeholder)
+    if (oldNorm.endsWith('/.folder')) {
+      const oldFolderPath = oldNorm.substring(0, oldNorm.length - 8); // Remove /.folder
+      const newFolderPath = newPath;
+      
+      // List all files in old folder and move them
+      const blobs = [];
+      for await (const blob of containerClient.listBlobsFlat()) {
+        blobs.push(blob);
+      }
+
+      for (const blob of blobs) {
+        if (blob.name.startsWith(oldFolderPath + '/')) {
+          const relativePath = blob.name.substring(oldFolderPath.length + 1);
+          const newBlobPath = newFolderPath + '/' + relativePath;
+          
+          // Download and re-upload with new path
+          const sourceClient = containerClient.getBlobClient(blob.name);
+          const downloadResponse = await sourceClient.download();
+          const buffer = await downloadResponse.blobBody.arrayBuffer();
+          
+          const destClient = containerClient.getBlockBlobClient(newBlobPath);
+          await destClient.upload(Buffer.from(buffer), buffer.byteLength);
+          await sourceClient.delete();
+        }
+      }
+
+      // Update placeholder
+      const oldPlaceholder = oldNorm;
+      const newPlaceholder = newPath + '/.folder';
+      const placeholderClient = containerClient.getBlobClient(oldPlaceholder);
+      const newPlaceholderClient = containerClient.getBlockBlobClient(newPlaceholder);
+      
+      await newPlaceholderClient.upload('', 0);
+      await placeholderClient.delete();
+    } else {
+      // It's a file - just copy and delete
+      const sourceClient = containerClient.getBlobClient(oldNorm);
+      const downloadResponse = await sourceClient.download();
+      const buffer = await downloadResponse.blobBody.arrayBuffer();
+
+      const destClient = containerClient.getBlockBlobClient(newPath);
+      await destClient.upload(Buffer.from(buffer), buffer.byteLength);
+      await sourceClient.delete();
+    }
+
+    res.json({ 
+      message: 'Renamed successfully',
+      oldPath: oldNorm,
+      newPath,
+    });
+  } catch (error) {
+    console.error('Error renaming:', error.message);
+    res.status(500).json({ error: 'Failed to rename' });
+  }
+});
+
+// DELETE /api/folders/:folderPath - Delete folder and contents (Uploader+)
+router.delete('/folders/:folderPath', async (req, res) => {
+  try {
+    if (!checkPermission(req.user.roles, 'uploader')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const folderPath = normalizePath(req.params.folderPath);
+    let deletedCount = 0;
+
+    // List all blobs in folder
+    for await (const blob of containerClient.listBlobsFlat()) {
+      if (blob.name.startsWith(folderPath + '/') || blob.name === folderPath + '/.folder') {
+        await containerClient.getBlobClient(blob.name).delete();
+        deletedCount++;
+      }
+    }
+
+    res.json({ 
+      message: 'Folder deleted successfully',
+      folderPath,
+      itemsDeleted: deletedCount,
+    });
+  } catch (error) {
+    console.error('Error deleting folder:', error.message);
+    res.status(500).json({ error: 'Failed to delete folder' });
   }
 });
 
