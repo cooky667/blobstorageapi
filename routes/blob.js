@@ -393,7 +393,9 @@ router.delete('/:name', async (req, res) => {
   }
 });
 
-// POST /api/folders - Create folder (Uploader+)
+// POST /api/files/folders/create - Create folder (Uploader+)
+// Note: We don't actually create a blob - folders are virtual based on file paths
+// The folder will appear once files are uploaded into it
 router.post('/folders/create', async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'uploader')) {
@@ -406,17 +408,15 @@ router.post('/folders/create', async (req, res) => {
     }
 
     const normalized = normalizePath(folderPath);
-    // Create a placeholder blob to represent the folder
-    const placeholderPath = normalized.endsWith('/') 
-      ? normalized + '.folder' 
-      : normalized + '/.folder';
+    console.log(`Creating folder: ${normalized}`);
 
-    const emptyBuffer = Buffer.from('');
-    await containerClient.getBlockBlobClient(placeholderPath).upload(emptyBuffer, emptyBuffer.length);
-
+    // In Azure Blob Storage, folders are virtual - they exist when files exist in them
+    // We just return success since the folder will be created automatically when
+    // users upload files into it via the ?folder= parameter
     res.json({ 
       message: 'Folder created successfully', 
       folderPath: normalized,
+      note: 'Folders are virtual and will appear once files are uploaded into them',
     });
   } catch (error) {
     console.error('Error creating folder:', error.message, error.stack);
@@ -513,7 +513,7 @@ router.post('/rename', async (req, res) => {
   }
 });
 
-// DELETE /api/folders/:folderPath - Delete folder and contents (Uploader+)
+// DELETE /api/files/folders/:folderPath - Delete folder and contents (Uploader+)
 router.delete('/folders/:folderPath', async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'uploader')) {
@@ -521,15 +521,20 @@ router.delete('/folders/:folderPath', async (req, res) => {
     }
 
     const folderPath = normalizePath(req.params.folderPath);
+    console.log(`Deleting folder and contents: ${folderPath}`);
+    
     let deletedCount = 0;
 
-    // List all blobs in folder
+    // List all blobs in folder and delete them
     for await (const blob of containerClient.listBlobsFlat()) {
-      if (blob.name.startsWith(folderPath + '/') || blob.name === folderPath + '/.folder') {
+      if (blob.name.startsWith(folderPath + '/')) {
+        console.log(`Deleting blob: ${blob.name}`);
         await containerClient.getBlobClient(blob.name).delete();
         deletedCount++;
       }
     }
+
+    console.log(`Deleted ${deletedCount} items from folder: ${folderPath}`);
 
     res.json({ 
       message: 'Folder deleted successfully',
@@ -537,8 +542,8 @@ router.delete('/folders/:folderPath', async (req, res) => {
       itemsDeleted: deletedCount,
     });
   } catch (error) {
-    console.error('Error deleting folder:', error.message);
-    res.status(500).json({ error: 'Failed to delete folder' });
+    console.error('Error deleting folder:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to delete folder', details: error.message });
   }
 });
 
