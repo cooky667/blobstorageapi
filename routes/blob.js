@@ -60,8 +60,21 @@ const getBaseName = (path) => {
   return lastSlash === -1 ? normalized : normalized.substring(lastSlash + 1);
 };
 
-// Helper: build hierarchical structure from flat blob list
-const buildHierarchy = (blobs, folderPath = '') => {
+// Helper: convert readable stream to buffer
+const streamToBuffer = (readableStream) => {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    readableStream.on('data', (data) => {
+      chunks.push(data instanceof Buffer ? data : Buffer.from(data));
+    });
+    readableStream.on('end', () => {
+      resolve(Buffer.concat(chunks));
+    });
+    readableStream.on('error', reject);
+  });
+};
+
+// GET /api/files - List files with hierarchical structure (Reader+)
   const folders = new Map();
   const files = [];
 
@@ -427,11 +440,11 @@ router.post('/move', async (req, res) => {
     // Download source blob
     const sourceClient = containerClient.getBlobClient(sourceNorm);
     const downloadResponse = await sourceClient.download();
-    const buffer = await downloadResponse.blobBody.arrayBuffer();
+    const buffer = await streamToBuffer(downloadResponse.blobBody);
 
     // Upload to destination
     const destClient = containerClient.getBlockBlobClient(destNorm);
-    await destClient.upload(Buffer.from(buffer), buffer.byteLength);
+    await destClient.upload(buffer, buffer.length);
 
     // Delete source
     await sourceClient.delete();
@@ -482,10 +495,10 @@ router.post('/rename', async (req, res) => {
           // Download and re-upload with new path
           const sourceClient = containerClient.getBlobClient(blob.name);
           const downloadResponse = await sourceClient.download();
-          const buffer = await downloadResponse.blobBody.arrayBuffer();
+          const buffer = await streamToBuffer(downloadResponse.blobBody);
           
           const destClient = containerClient.getBlockBlobClient(newBlobPath);
-          await destClient.upload(Buffer.from(buffer), buffer.byteLength);
+          await destClient.upload(buffer, buffer.length);
           await sourceClient.delete();
         }
       }
@@ -502,10 +515,10 @@ router.post('/rename', async (req, res) => {
       // It's a file - just copy and delete
       const sourceClient = containerClient.getBlobClient(oldNorm);
       const downloadResponse = await sourceClient.download();
-      const buffer = await downloadResponse.blobBody.arrayBuffer();
+      const buffer = await streamToBuffer(downloadResponse.blobBody);
 
       const destClient = containerClient.getBlockBlobClient(newPath);
-      await destClient.upload(Buffer.from(buffer), buffer.byteLength);
+      await destClient.upload(buffer, buffer.length);
       await sourceClient.delete();
     }
 
