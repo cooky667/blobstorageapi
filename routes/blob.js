@@ -411,15 +411,16 @@ router.post('/folders/create', async (req, res) => {
       ? normalized + '.folder' 
       : normalized + '/.folder';
 
-    await containerClient.getBlockBlobClient(placeholderPath).upload('', 0);
+    const emptyBuffer = Buffer.from('');
+    await containerClient.getBlockBlobClient(placeholderPath).upload(emptyBuffer, emptyBuffer.length);
 
     res.json({ 
       message: 'Folder created successfully', 
       folderPath: normalized,
     });
   } catch (error) {
-    console.error('Error creating folder:', error.message);
-    res.status(500).json({ error: 'Failed to create folder' });
+    console.error('Error creating folder:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to create folder', details: error.message });
   }
 });
 
@@ -477,51 +478,29 @@ router.post('/rename', async (req, res) => {
     const folderPath = getFolderPath(oldNorm);
     const newPath = folderPath ? folderPath + '/' + newName : newName;
 
-    // If it's a folder (has .folder placeholder)
-    if (oldNorm.endsWith('/.folder')) {
-      const oldFolderPath = oldNorm.substring(0, oldNorm.length - 8); // Remove /.folder
-      const newFolderPath = newPath;
-      
-      // List all files in old folder and move them
-      const blobs = [];
-      for await (const blob of containerClient.listBlobsFlat()) {
-        blobs.push(blob);
-      }
+    console.log(`Renaming file: ${oldNorm} -> ${newPath}`);
 
-      for (const blob of blobs) {
-        if (blob.name.startsWith(oldFolderPath + '/')) {
-          const relativePath = blob.name.substring(oldFolderPath.length + 1);
-          const newBlobPath = newFolderPath + '/' + relativePath;
-          
-          // Download and re-upload with new path
-          const sourceClient = containerClient.getBlobClient(blob.name);
-          const downloadResponse = await sourceClient.download();
-          const buffer = await streamToBuffer(downloadResponse.blobBody);
-          
-          const destClient = containerClient.getBlockBlobClient(newBlobPath);
-          await destClient.upload(buffer, buffer.length);
-          await sourceClient.delete();
-        }
-      }
+    // Download the blob
+    const sourceClient = containerClient.getBlobClient(oldNorm);
+    console.log(`Getting source client for: ${oldNorm}`);
+    
+    const downloadResponse = await sourceClient.download();
+    console.log(`Downloaded blob, converting stream to buffer`);
+    
+    const buffer = await streamToBuffer(downloadResponse.blobBody);
+    console.log(`Buffer created, size: ${buffer.length} bytes`);
 
-      // Update placeholder
-      const oldPlaceholder = oldNorm;
-      const newPlaceholder = newPath + '/.folder';
-      const placeholderClient = containerClient.getBlobClient(oldPlaceholder);
-      const newPlaceholderClient = containerClient.getBlockBlobClient(newPlaceholder);
-      
-      await newPlaceholderClient.upload('', 0);
-      await placeholderClient.delete();
-    } else {
-      // It's a file - just copy and delete
-      const sourceClient = containerClient.getBlobClient(oldNorm);
-      const downloadResponse = await sourceClient.download();
-      const buffer = await streamToBuffer(downloadResponse.blobBody);
+    // Upload to new path
+    const destClient = containerClient.getBlockBlobClient(newPath);
+    console.log(`Uploading to destination: ${newPath}`);
+    
+    await destClient.upload(buffer, buffer.length);
+    console.log(`Successfully uploaded to ${newPath}`);
 
-      const destClient = containerClient.getBlockBlobClient(newPath);
-      await destClient.upload(buffer, buffer.length);
-      await sourceClient.delete();
-    }
+    // Delete original
+    console.log(`Deleting original blob: ${oldNorm}`);
+    await sourceClient.delete();
+    console.log(`Successfully deleted ${oldNorm}`);
 
     res.json({ 
       message: 'Renamed successfully',
@@ -530,7 +509,7 @@ router.post('/rename', async (req, res) => {
     });
   } catch (error) {
     console.error('Error renaming:', error.message, error.stack);
-    res.status(500).json({ error: 'Failed to rename', details: error.message, details: error.message });
+    res.status(500).json({ error: 'Failed to rename', details: error.message });
   }
 });
 
