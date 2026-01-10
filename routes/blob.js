@@ -332,19 +332,25 @@ router.post('/chunked', (req, res) => {
 // POST /api/files/folders/create - Create folder (Uploader+)
 // MUST be before catch-all POST / to match specific path first
 // Creates a .keep marker blob to persist the folder even if empty
-router.post('/folders/create', async (req, res) => {
+router.post('/folders/create', express.json(), async (req, res) => {
   try {
+    console.log('=== FOLDER CREATE REQUEST ===');
+    console.log('Headers:', req.headers);
+    console.log('Body:', req.body);
+    console.log('User roles:', req.user?.roles);
+    
     if (!checkPermission(req.user.roles, 'uploader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
     const { folderPath } = req.body;
     if (!folderPath) {
+      console.error('folderPath missing from request body');
       return res.status(400).json({ error: 'folderPath is required' });
     }
 
     const normalized = normalizePath(folderPath);
-    console.log(`Creating folder: ${normalized}`);
+    console.log(`Creating folder with .keep marker: ${normalized}/.keep`);
 
     // Create a .keep marker blob to persist the folder
     const markerPath = normalized + '/.keep';
@@ -353,6 +359,7 @@ router.post('/folders/create', async (req, res) => {
       blobHTTPHeaders: { blobContentType: 'application/x-msdownload' }
     });
 
+    console.log(`✓ Folder created successfully: ${normalized}`);
     res.json({ 
       message: 'Folder created successfully', 
       folderPath: normalized,
