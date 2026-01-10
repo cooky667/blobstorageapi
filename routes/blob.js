@@ -147,15 +147,15 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/files/exists/:name - Check if blob exists (Reader+)
-// MUST be before /:name(*) route to avoid wildcard matching
-router.get('/exists/:name(*)', async (req, res) => {
+// GET /api/files/exists/* - Check if blob exists (Reader+)
+// MUST be before catch-all download route to avoid wildcard matching
+router.get('/exists/*', async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'reader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const blobPath = normalizePath(req.params.name);
+    const blobPath = normalizePath(req.params[0] || '');
     const blobClient = containerClient.getBlobClient(blobPath);
     const exists = await blobClient.exists();
     res.json({ exists });
@@ -277,14 +277,14 @@ router.post('/chunked', (req, res) => {
   req.pipe(bb);
 });
 
-// GET /api/files/:name - Download file (Reader+)
-router.get('/:name(*)', async (req, res) => {
+// GET /api/files/* - Download file (Reader+)
+router.get('/*', async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'reader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const blobPath = normalizePath(req.params.name);
+    const blobPath = normalizePath(req.params[0] || '');
     const blobClient = containerClient.getBlobClient(blobPath);
     const download = await blobClient.download();
 
