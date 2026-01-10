@@ -148,14 +148,15 @@ router.get('/', async (req, res) => {
 });
 
 // GET /api/files/exists/:name - Check if blob exists (Reader+)
-// MUST be before /:name route to avoid wildcard matching
-router.get('/exists/:name', async (req, res) => {
+// MUST be before /:name(*) route to avoid wildcard matching
+router.get('/exists/:name(*)', async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'reader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const blobClient = containerClient.getBlobClient(req.params.name);
+    const blobPath = normalizePath(req.params.name);
+    const blobClient = containerClient.getBlobClient(blobPath);
     const exists = await blobClient.exists();
     res.json({ exists });
   } catch (error) {
@@ -277,17 +278,19 @@ router.post('/chunked', (req, res) => {
 });
 
 // GET /api/files/:name - Download file (Reader+)
-router.get('/:name', async (req, res) => {
+router.get('/:name(*)', async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'reader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const blobClient = containerClient.getBlobClient(req.params.name);
+    const blobPath = normalizePath(req.params.name);
+    const blobClient = containerClient.getBlobClient(blobPath);
     const download = await blobClient.download();
 
     res.setHeader('Content-Type', download.contentType || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${req.params.name}"`);
+    const filename = blobPath.split('/').pop() || blobPath;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     download.readableStreamBody.pipe(res);
   } catch (error) {
     console.error('Error downloading blob:', error.message);
