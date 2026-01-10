@@ -439,14 +439,14 @@ router.post('/move', async (req, res) => {
     const sourceNorm = normalizePath(sourcePath);
     const destNorm = normalizePath(destinationPath);
 
-    // Download source blob
+    // Server-side move via copy + delete (fast, no data transfer through API)
     const sourceClient = containerClient.getBlobClient(sourceNorm);
-    const downloadResponse = await sourceClient.download();
-    const buffer = await streamToBuffer(downloadResponse.blobBody);
-
-    // Upload to destination
-    const destClient = containerClient.getBlockBlobClient(destNorm);
-    await destClient.upload(buffer, buffer.length);
+    const destClient = containerClient.getBlobClient(destNorm);
+    
+    console.log(`Starting server-side copy from ${sourceNorm} to ${destNorm}`);
+    const copyPoller = await destClient.beginCopyFromURL(sourceClient.url);
+    await copyPoller.pollUntilDone();
+    console.log(`Copy completed for move operation`);
 
     // Delete source
     await sourceClient.delete();
