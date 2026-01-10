@@ -486,8 +486,9 @@ router.post('/rename', async (req, res) => {
     
     const downloadResponse = await sourceClient.download();
     console.log(`Downloaded blob, converting stream to buffer`);
+    console.log(`Download response keys: ${Object.keys(downloadResponse).join(', ')}`);
     
-    const buffer = await streamToBuffer(downloadResponse.blobBody);
+    const buffer = await streamToBuffer(downloadResponse.readableStreamBody);
     console.log(`Buffer created, size: ${buffer.length} bytes`);
 
     // Upload to new path
