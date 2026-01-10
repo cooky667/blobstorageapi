@@ -447,17 +447,19 @@ router.post('/', (req, res) => {
   }
 });
 
-// DELETE /api/files/:name - Delete file (Uploader+)
-router.delete('/:name', async (req, res) => {
+// DELETE /api/files/* - Delete file (Uploader+)
+// Regex route to capture blob paths with slashes (e.g., subfolder/file.txt)
+router.delete(/^\/(.+)$/i, async (req, res) => {
   try {
     if (!checkPermission(req.user.roles, 'uploader')) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
 
-    const blobClient = containerClient.getBlobClient(req.params.name);
+    const blobPath = req.params[0];
+    const blobClient = containerClient.getBlobClient(blobPath);
     await blobClient.delete();
 
-    res.json({ message: 'File deleted successfully', filename: req.params.name });
+    res.json({ message: 'File deleted successfully', filename: blobPath });
   } catch (error) {
     console.error('Error deleting blob:', error.message);
     res.status(500).json({ error: 'Failed to delete file' });
