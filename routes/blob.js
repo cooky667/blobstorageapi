@@ -529,8 +529,8 @@ router.post('/rename', async (req, res) => {
       newPath,
     });
   } catch (error) {
-    console.error('Error renaming:', error.message);
-    res.status(500).json({ error: 'Failed to rename' });
+    console.error('Error renaming:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to rename', details: error.message });
   }
 });
 
