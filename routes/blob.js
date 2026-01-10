@@ -333,7 +333,7 @@ router.get(/^\/(.+)$/i, async (req, res) => {
 
     // Allow either bearer auth (default) or a short-lived download token
     let authorized = false;
-    if (checkPermission(req.user.roles, 'reader')) {
+    if (req.user && req.user.roles && checkPermission(req.user.roles, 'reader')) {
       authorized = true;
     } else if (req.query.dt) {
       const verified = verifyDownloadToken(req.query.dt);
