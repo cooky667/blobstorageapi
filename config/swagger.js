@@ -15,6 +15,9 @@ const createSwaggerOptions = () => {
         contact: {
           name: 'API Support',
         },
+        'x-documentation': {
+          'authentication': '# Authentication & Authorization\n\nThis API uses two authentication mechanisms:\n\n## 1. Bearer Token Authentication\nAll endpoints (except public downloads) require Azure Entra ID JWT tokens.\n\n**Obtaining a token:**\n- Use OAuth 2.0 Authorization Code flow with your Azure Entra ID app registration\n- Frontend SPA should handle auth via MSAL (Microsoft Authentication Library)\n- Token includes user roles in claims\n\n**Using the token:**\n- Add to all requests: `Authorization: Bearer <token>`\n- Example: `curl -H "Authorization: Bearer eyJhbGc..." https://api.example.com/api/files`\n\n**Role-based access:**\n- **Reader**: List files, download files, generate download tokens\n- **Uploader**: All Reader permissions + upload files, create folders\n- **Admin**: All permissions + delete files/folders, manage access\n\n## 2. Download Token Authentication\nFor sharing downloads without bearer tokens (external users, scripts, VMs).\n\n**Obtaining a download token:**\n- Call `POST /api/files/download-token` with Bearer auth\n- Returns HMAC-signed token valid for 5 minutes\n- Path-bound (cannot be reused for different files)\n\n**Using the token:**\n- Add to download URL: `https://api.example.com/api/files/download/path?dt=<token>`\n- No Authorization header needed\n- Example: `curl https://api.example.com/api/files/download/docs/report.pdf?dt=abc123...`\n\n## Error Codes\n- `401 Unauthorized`: Missing or invalid Bearer token\n- `403 Forbidden`: Insufficient role permissions for this operation\n- `404 Not Found`: File/folder does not exist\n- `429 Too Many Requests`: Rate limited (retry after delay)',
+        },
       },
       servers: [
         {
@@ -25,7 +28,7 @@ const createSwaggerOptions = () => {
       tags: [
         {
           name: 'Authentication',
-          description: 'Information about API authentication',
+          description: 'API authentication uses Azure Entra ID Bearer tokens (OAuth 2.0) or time-limited HMAC-signed download tokens. All endpoints require authentication except public downloads with valid token. Three role levels: Reader (read-only), Uploader (+ write), Admin (+ delete). Download tokens have 5-minute TTL and are path-bound.',
         },
         {
           name: 'Files & Folders',

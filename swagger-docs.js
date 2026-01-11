@@ -1,5 +1,53 @@
 /**
  * @swagger
+ * tags:
+ *   - name: Authentication
+ *     description: |
+ *       # API Authentication Guide
+ *       
+ *       This API supports two authentication mechanisms:
+ *       
+ *       ## Bearer Token (OAuth 2.0)
+ *       Used for all authenticated operations. Requires Azure Entra ID JWT.
+ *       
+ *       **How to obtain:**
+ *       - Register application in Azure Entra ID
+ *       - Use OAuth 2.0 Authorization Code flow
+ *       - Frontend uses MSAL library to acquire token
+ *       - Token included in Authorization header
+ *       
+ *       **Token format:**
+ *       ```
+ *       Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *       ```
+ *       
+ *       **Role-based permissions:**
+ *       - **Reader**: GET /api/files (list), GET /api/files/download (download), POST /api/files/download-token
+ *       - **Uploader**: All Reader permissions + POST /api/files (upload), POST /api/folders (create)
+ *       - **Admin**: All permissions + DELETE /api/files, DELETE /api/folders
+ *       
+ *       ## Download Token (HMAC-signed)
+ *       Time-limited token for sharing file downloads without OAuth.
+ *       
+ *       **How to obtain:**
+ *       - Call `POST /api/files/download-token` with Bearer auth
+ *       - Provide file path in request body
+ *       - Receive HMAC-SHA256 signed token (5-minute TTL)
+ *       
+ *       **Usage:**
+ *       ```
+ *       GET /api/files/download/{filePath}?dt=<token>
+ *       ```
+ *       - No Authorization header needed
+ *       - Token is path-bound (cannot reuse for different files)
+ *       - Example: `GET /api/files/download/docs/report.pdf?dt=abc123xyz789`
+ *       
+ *       ## Error Responses
+ *       - `401 Unauthorized`: Missing or invalid Bearer token
+ *       - `403 Forbidden`: User lacks required role for operation
+ *       - `404 Not Found`: File/folder does not exist
+ *       - `429 Too Many Requests`: Rate limited (check Retry-After header)
+ *
  * /api/files:
  *   get:
  *     summary: List files and folders in current path
