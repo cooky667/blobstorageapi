@@ -29,7 +29,9 @@ app.use(cors(corsOptions));
 
 // Swagger/OpenAPI documentation (no auth required)
 // Use middleware to dynamically set the server URL based on incoming request
-app.use('/api-docs', (req, res, next) => {
+app.use('/api-docs', swaggerUi.serve);
+
+app.get('/api-docs', (req, res, next) => {
   // Build the server URL from the request
   const protocol = req.get('x-forwarded-proto') || req.protocol || 'https';
   const host = req.get('x-forwarded-host') || req.get('host');
@@ -53,8 +55,6 @@ app.use('/api-docs', (req, res, next) => {
     },
   })(req, res, next);
 });
-
-app.use('/api-docs', swaggerUi.serve);
 
 // Swagger spec endpoint (no auth required) - also dynamic
 app.get('/api-docs.json', (req, res) => {
