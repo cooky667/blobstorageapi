@@ -1,5 +1,54 @@
 /**
  * @swagger
+ * /api/auth:
+ *   get:
+ *     summary: Authentication Overview
+ *     description: |
+ *       # Authentication & Authorization
+ *       
+ *       This API uses two authentication mechanisms:
+ *       
+ *       ## 1. Bearer Token Authentication
+ *       All endpoints (except public downloads) require Azure Entra ID JWT tokens.
+ *       
+ *       **Obtaining a token:**
+ *       - Use OAuth 2.0 Authorization Code flow with your Azure Entra ID app registration
+ *       - Frontend SPA should handle auth via MSAL (Microsoft Authentication Library)
+ *       - Token includes user roles in claims
+ *       
+ *       **Using the token:**
+ *       - Add to all requests: `Authorization: Bearer <token>`
+ *       - Example: `curl -H "Authorization: Bearer eyJhbGc..." https://api.example.com/api/files`
+ *       
+ *       **Role-based access:**
+ *       - **Reader**: List files, download files, generate download tokens
+ *       - **Uploader**: All Reader permissions + upload files, create folders
+ *       - **Admin**: All permissions + delete files/folders, manage access
+ *       
+ *       ## 2. Download Token Authentication
+ *       For sharing downloads without bearer tokens (external users, scripts, VMs).
+ *       
+ *       **Obtaining a download token:**
+ *       - Call `POST /api/files/download-token` with Bearer auth
+ *       - Returns HMAC-signed token valid for 5 minutes
+ *       - Path-bound (cannot be reused for different files)
+ *       
+ *       **Using the token:**
+ *       - Add to download URL: `https://api.example.com/api/files/download/path?dt=<token>`
+ *       - No Authorization header needed
+ *       - Example: `curl https://api.example.com/api/files/download/docs/report.pdf?dt=abc123...`
+ *       
+ *       ## Error Codes
+ *       - `401 Unauthorized`: Missing or invalid Bearer token
+ *       - `403 Forbidden`: Insufficient role permissions for this operation
+ *       - `404 Not Found`: File/folder does not exist
+ *       - `429 Too Many Requests`: Rate limited (retry after delay)
+ *     tags:
+ *       - Authentication
+ *     responses:
+ *       200:
+ *         description: Authentication documentation
+ *
  * /api/files:
  *   get:
  *     summary: List files and folders in current path
@@ -81,6 +130,8 @@
  *                       type:
  *                         type: string
  *                         enum: ["file"]
+ *       401:
+ *         description: Unauthorized - Missing or invalid Bearer token
  *       403:
  *         description: Insufficient permissions - Reader role or above required
  *       500:
@@ -237,12 +288,10 @@
  *               properties:
  *                 token:
  *                   type: string
- *                   description: Base64url-encoded HMAC token
+ *                   description: Base64url-encoded HMAC token (5-minute TTL)
  *                   example: "cGF0aHxleHB8c2ln..."
- *                 expiresIn:
- *                   type: integer
- *                   description: Token TTL in seconds
- *                   example: 300
+ *               required:
+ *                 - token
  *       403:
  *         description: Insufficient permissions
  *       500:

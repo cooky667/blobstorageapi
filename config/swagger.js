@@ -22,19 +22,33 @@ const createSwaggerOptions = () => {
           description: 'Production Storage API Server',
         },
       ],
+      tags: [
+        {
+          name: 'Authentication',
+          description: 'Information about API authentication',
+        },
+        {
+          name: 'Files & Folders',
+          description: 'File and folder operations',
+        },
+        {
+          name: 'Download',
+          description: 'File download and token management',
+        },
+      ],
     components: {
       securitySchemes: {
         BearerAuth: {
           type: 'http',
           scheme: 'bearer',
           bearerFormat: 'JWT',
-          description: 'Azure Entra ID token',
+          description: 'Azure Entra ID (formerly Azure AD) JWT token. Obtain via OAuth 2.0 authorization code flow. Token includes user roles (Reader, Uploader, Admin) in claims.',
         },
         DownloadToken: {
           type: 'apiKey',
           in: 'query',
           name: 'dt',
-          description: 'HMAC-signed download token (5-minute TTL)',
+          description: 'HMAC-SHA256 signed token for time-limited file downloads without Bearer token. Generated via POST /api/files/download-token. TTL: 5 minutes. Add as query parameter: ?dt=<token>',
         },
       },
       schemas: {
