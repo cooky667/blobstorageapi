@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpecs = require('./config/swagger');
 const authMiddleware = require('./middleware/auth');
 const blobRoutes = require('./routes/blob');
 
@@ -24,6 +26,20 @@ const corsOptions = {
 console.log('CORS configured for origins:', allowedOrigins.length ? allowedOrigins : 'all (*)')
 
 app.use(cors(corsOptions));
+
+// Swagger/OpenAPI documentation (no auth required)
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs, { 
+  swaggerOptions: { 
+    persistAuthorization: true,
+    defaultModelsExpandDepth: 1,
+  },
+}));
+
+// Swagger spec endpoint (no auth required)
+app.get('/api-docs.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpecs);
+});
 
 // Health check (no auth)
 app.get('/health', (req, res) => {
@@ -57,4 +73,4 @@ app.use('/api/files', blobRoutes);
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`);
-});
+  console.log(`Swagger docs available at http://localhost:${PORT}/api-docs`);
