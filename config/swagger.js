@@ -1,23 +1,27 @@
 const swaggerJsdoc = require('swagger-jsdoc');
 const path = require('path');
 
-const options = {
-  definition: {
-    openapi: '3.0.0',
-    info: {
-      title: 'Storage Wrapper API',
-      version: '1.0.0',
-      description: 'API for managing files and folders in Azure Blob Storage with role-based access control',
-      contact: {
-        name: 'API Support',
+// Create swagger options with dynamic server URL
+const createSwaggerOptions = () => {
+  const apiUrl = process.env.API_URL || 'http://localhost:3001';
+  
+  return {
+    definition: {
+      openapi: '3.0.0',
+      info: {
+        title: 'Storage Wrapper API',
+        version: '1.0.0',
+        description: 'Enterprise-grade API for managing files and folders in Azure Blob Storage with role-based access control, streaming uploads/downloads, and secure token-based access',
+        contact: {
+          name: 'API Support',
+        },
       },
-    },
-    servers: [
-      {
-        url: process.env.API_URL || 'http://localhost:3001',
-        description: 'Storage API Server',
-      },
-    ],
+      servers: [
+        {
+          url: apiUrl,
+          description: 'Production Storage API Server',
+        },
+      ],
     components: {
       securitySchemes: {
         BearerAuth: {
@@ -82,8 +86,10 @@ const options = {
     ],
   },
   apis: [path.join(__dirname, '../swagger-docs.js'), path.join(__dirname, '../routes/blob.js')],
+  };
 };
 
+const options = createSwaggerOptions();
 const specs = swaggerJsdoc(options);
 
 module.exports = specs;
