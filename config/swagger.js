@@ -1,4 +1,5 @@
 const swaggerJsdoc = require('swagger-jsdoc');
+const path = require('path');
 
 const options = {
   definition: {
@@ -13,7 +14,7 @@ const options = {
     },
     servers: [
       {
-        url: process.env.API_URL || 'http://localhost:5000',
+        url: process.env.API_URL || 'http://localhost:3001',
         description: 'Storage API Server',
       },
     ],
@@ -80,7 +81,7 @@ const options = {
       { DownloadToken: [] },
     ],
   },
-  apis: ['./routes/blob.js'],
+  apis: [path.join(__dirname, '../swagger-docs.js'), path.join(__dirname, '../routes/blob.js')],
 };
 
 const specs = swaggerJsdoc(options);
