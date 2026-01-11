@@ -74,3 +74,4 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`);
   console.log(`Swagger docs available at http://localhost:${PORT}/api-docs`);
+});
