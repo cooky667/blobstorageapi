@@ -36,7 +36,7 @@ const createSwaggerOptions = () => {
           description: 'File download and token management',
         },
       ],
-    components: {
+      components: {
       securitySchemes: {
         BearerAuth: {
           type: 'http',
