@@ -28,17 +28,54 @@ console.log('CORS configured for origins:', allowedOrigins.length ? allowedOrigi
 app.use(cors(corsOptions));
 
 // Swagger/OpenAPI documentation (no auth required)
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs, { 
-  swaggerOptions: { 
-    persistAuthorization: true,
-    defaultModelsExpandDepth: 1,
-  },
-}));
+// Use middleware to dynamically set the server URL based on incoming request
+app.use('/api-docs', (req, res, next) => {
+  // Build the server URL from the request
+  const protocol = req.get('x-forwarded-proto') || req.protocol || 'https';
+  const host = req.get('x-forwarded-host') || req.get('host');
+  const baseUrl = `${protocol}://${host}`;
+  
+  // Update swagger specs with correct server URL
+  const dynamicSpecs = {
+    ...swaggerSpecs,
+    servers: [
+      {
+        url: baseUrl,
+        description: 'Current API Server',
+      },
+    ],
+  };
+  
+  swaggerUi.setup(dynamicSpecs, { 
+    swaggerOptions: { 
+      persistAuthorization: true,
+      defaultModelsExpandDepth: 1,
+    },
+  })(req, res, next);
+});
 
-// Swagger spec endpoint (no auth required)
+app.use('/api-docs', swaggerUi.serve);
+
+// Swagger spec endpoint (no auth required) - also dynamic
 app.get('/api-docs.json', (req, res) => {
+  // Build the server URL from the request
+  const protocol = req.get('x-forwarded-proto') || req.protocol || 'https';
+  const host = req.get('x-forwarded-host') || req.get('host');
+  const baseUrl = `${protocol}://${host}`;
+  
+  // Return specs with dynamic server URL
+  const dynamicSpecs = {
+    ...swaggerSpecs,
+    servers: [
+      {
+        url: baseUrl,
+        description: 'Current API Server',
+      },
+    ],
+  };
+  
   res.setHeader('Content-Type', 'application/json');
-  res.send(swaggerSpecs);
+  res.send(dynamicSpecs);
 });
 
 // Health check (no auth)
